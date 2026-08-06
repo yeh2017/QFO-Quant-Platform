@@ -1,7 +1,7 @@
 <h1 align="center">QFO量化回测平台</h1>
 
 <p align="center">
-  <strong>QFO Quant Platform · A 股本地化量化回测与数据分析平台</strong>
+  <strong>免费开源、本地运行的 A 股量化研究与回测平台</strong>
 </p>
 
 <p align="center">
@@ -14,18 +14,22 @@
 </p>
 
 <p align="center">
-  面向 A 股量化研究的本地化量化回测平台，覆盖 A股量化回测、股票量化回测、数据同步、智能选股、因子研究、策略回测、组合优化、风险分析、可视化分析、新闻情绪和推送通知。
+  帮助量化新手在个人电脑上完成数据同步、选股、策略回测和风险分析，支持 Windows 一键启动。
 </p>
 
 <p align="center">
+  <a href="https://github.com/yeh2017/QFO-Quant-Platform/releases/latest/download/QFO-Quant-Platform.zip"><strong>下载稳定版</strong></a> ·
+  <a href="https://www.qfo-quant-platform.com/"><strong>新手教学网站</strong></a> ·
+  <a href="#快速开始">快速开始</a> ·
   <a href="#产品预览">产品预览</a> ·
   <a href="#功能特性">功能特性</a> ·
-  <a href="#快速开始">快速开始</a> ·
   <a href="#技术栈与数据来源">技术栈与数据来源</a> ·
-  <a href="#推送通知">推送通知</a> ·
-  <a href="https://www.qfo-quant-platform.com/">教学网站</a> ·
   <a href="CONTRIBUTING.md">贡献说明</a> ·
   <a href="LICENSE">MIT License</a>
+</p>
+
+<p align="center">
+  如果 QFO 对你的量化学习或研究有帮助，欢迎点亮右上角的 Star，方便以后找到项目。
 </p>
 
 ## 项目亮点
@@ -53,7 +57,7 @@ QFO 是一个面向 A 股量化分析的本地化量化回测平台，适合在�
 
 ### Windows 用户
 
-1. **下载**：[直接下载 ZIP 源码包](https://github.com/yeh2017/QFO-Quant-Platform/archive/refs/heads/main.zip)
+1. **下载**：[直接下载最新稳定版](https://github.com/yeh2017/QFO-Quant-Platform/releases/latest/download/QFO-Quant-Platform.zip)
 2. **解压**：将压缩包解压到一个**不包含中文、空格**的路径下，例如 `D:\QFO`。
 3. **运行**：双击文件夹内的 **`run_first_time.bat`** 启动；日常快速启动使用 **`run_quick_start.bat`**。
 
