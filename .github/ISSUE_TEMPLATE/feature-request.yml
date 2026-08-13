@@ -1,0 +1,90 @@
+name: 功能建议
+description: 建议新增模块、改进操作流程或优化现有功能
+title: "[建议] "
+labels:
+  - 功能建议
+body:
+  - type: markdown
+    attributes:
+      value: |
+        欢迎说明你的真实使用场景。越具体，越容易评估和实现。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你遇到的问题
+      description: 当前在什么场景下不方便？请先描述问题，而不是只写功能名称。
+      placeholder: 当我使用……时，目前需要……
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议的解决方式
+      description: 描述期望的入口、操作过程和结果。
+    validations:
+      required: true
+  - type: dropdown
+    id: module
+    attributes:
+      label: 涉及模块
+      multiple: true
+      options:
+        - 安装与启动
+        - 系统设置
+        - 数据中台
+        - 智能选股（股票）
+        - 智能选股（ETF）
+        - 智能选股（可转债）
+        - 因子模块
+        - 策略回测
+        - 组合优化
+        - 风险管理
+        - 可视化
+        - 新闻与大模型
+        - 其他
+    validations:
+      required: true
+  - type: dropdown
+    id: windows-version
+    attributes:
+      label: Windows 版本
+      options:
+        - Windows 11
+        - Windows 10
+        - 其他
+        - 不适用
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python 版本
+      description: 不涉及运行环境时可填写“不适用”。
+      placeholder: Python 3.11.9 / 不适用
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 截图或参考示例
+      description: 可拖入界面截图；没有可填写“无”。请删除敏感信息。
+      placeholder: 拖入图片或填写“无”
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: 如果建议来自异常或性能问题，请粘贴日志；否则填写“不适用”。
+      render: shell
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索现有 Issue，没有找到相同建议。
+          required: true
+        - label: 我理解提交建议不代表一定会立即实现。
+          required: true
