@@ -1,0 +1,90 @@
+name: 安装失败反馈
+description: 启动程序无法安装、首次启动失败或环境初始化异常
+title: "[安装] "
+labels:
+  - 安装问题
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请填写下面的信息，并注意删除 Token、账号和本地隐私信息。
+  - type: input
+    id: qfo-version
+    attributes:
+      label: QFO 版本
+      description: 例如 v1.0.0；如果不知道，请填写安装包文件名。
+      placeholder: v1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: windows-version
+    attributes:
+      label: Windows 版本
+      options:
+        - Windows 11
+        - Windows 10
+        - 其他
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python 版本
+      description: 在终端运行 `python --version`；使用稳定版且未安装 Python 可填写“未单独安装”。
+      placeholder: Python 3.11.9 / 未单独安装
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: 安装方式
+      options:
+        - GitHub Release 稳定版
+        - Git 克隆源码
+        - 下载源码 ZIP
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 操作步骤
+      description: 从下载或解压开始，说明执行了哪些操作，以及在哪一步失败。
+      placeholder: |
+        1. 下载并解压……
+        2. 双击……
+        3. 出现错误……
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果与实际结果
+      placeholder: 预期正常打开；实际显示……
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 错误截图
+      description: 可直接拖入图片；上传前请遮挡 Token、账号和本地隐私信息。
+      placeholder: 请拖入完整错误截图；没有截图请说明原因。
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 错误日志
+      description: 请粘贴终端或日志中的完整错误，使用代码块包裹，并删除敏感信息。
+      render: shell
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已搜索现有 Issue，没有找到相同问题。
+          required: true
+        - label: 我已删除 Token、账号、路径中的用户名等敏感信息。
+          required: true
