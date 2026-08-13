@@ -20,6 +20,7 @@
 <p align="center">
   <a href="https://github.com/yeh2017/QFO-Quant-Platform/releases/latest/download/QFO-Quant-Platform.zip"><strong>下载稳定版</strong></a> ·
   <a href="https://www.qfo-quant-platform.com/"><strong>新手教学网站</strong></a> ·
+  <a href="https://www.bilibili.com/video/BV1jWgp6HENq/"><strong>完整视频教程</strong></a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#产品预览">产品预览</a> ·
   <a href="#功能特性">功能特性</a> ·
