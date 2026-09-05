@@ -73,7 +73,7 @@ QFO 是一个面向 A 股量化分析的本地化量化回测平台，适合在�
 
 ### Windows 用户
 
-1. **下载**：[直接下载最新稳定版](https://github.com/yeh2017/QFO-Quant-Platform/releases/latest/download/QFO-Quant-Platform.zip)
+1. **下载当前稳定版 v1.0.2**：[下载稳定版安装包](https://github.com/yeh2017/QFO-Quant-Platform/releases/latest/download/QFO-Quant-Platform.zip)
 2. **解压**：将压缩包解压到一个**不包含中文、空格**的路径下，例如 `D:\QFO`。
 3. **运行**：双击文件夹内的 **`run_first_time.bat`** 启动；日常快速启动使用 **`run_quick_start.bat`**。
 
