@@ -19,6 +19,7 @@ const PortfolioPanel = ({
     customStocks = [],
     onViewKline,
     setAlerts = () => {},
+    backtestContext = null,
 }) => {
     const [allResults, setAllResults] = useState(null);  // { max_sharpe: {...}, risk_parity: {...}, ... }
     const [selectedMethod, setSelectedMethod] = useState('max_sharpe');
@@ -90,6 +91,18 @@ const PortfolioPanel = ({
                         </button>
                     </div>
                 </div>
+
+                {/* 回测来源标签 */}
+                {backtestContext && (
+                    <div className="text-xs text-indigo-300 bg-indigo-900/20 border border-indigo-700/30 rounded-lg px-3 py-1.5 inline-flex items-center gap-1.5 mt-2">
+                        <span>📎</span>
+                        <span>{backtestContext.strategyName}</span>
+                        <span className="text-slate-500">·</span>
+                        <span>{backtestContext.actualStartDate || backtestContext.startDate} ~ {backtestContext.actualEndDate || backtestContext.endDate}</span>
+                        <span className="text-slate-500">·</span>
+                        <span>{backtestContext.sourceLabel}</span>
+                    </div>
+                )}
             </div>
 
             {/* 数据充足性提示 */}

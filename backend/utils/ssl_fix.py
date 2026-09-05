@@ -64,18 +64,6 @@ def _make_request_with_retry(method, url, max_retries=3, **kwargs):
             last_error = e
             if attempt < max_retries - 1:
                 time.sleep(0.5 * (attempt + 1))
-    
-    # 尝试使用 httpx 作为备选
-    try:
-        import httpx
-        with httpx.Client(verify=False, timeout=60) as client:
-            if method.lower() == 'get':
-                return client.get(url, **{k: v for k, v in kwargs.items() if k not in ['verify', 'timeout']})
-            else:
-                return client.post(url, **{k: v for k, v in kwargs.items() if k not in ['verify', 'timeout']})
-    except Exception:
-        pass
-    
     raise last_error
 
 

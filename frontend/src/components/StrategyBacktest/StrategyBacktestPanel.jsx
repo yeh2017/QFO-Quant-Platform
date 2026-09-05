@@ -3,7 +3,7 @@ import {
     Zap, Brain, Shield, Activity, Save, Trash2, FolderOpen, Plus, Calendar,
     BarChart3, Play, TrendingUp, AlertTriangle, Clock, RefreshCw, ChevronDown, SlidersHorizontal, Layers
 } from 'lucide-react';
-import { strategyApi, backtestApi, riskApi } from '../../services/api';
+import { strategyApi, backtestApi } from '../../services/api';
 import { classifyAsset } from '../../utils/assetType';
 import { fmtNum, fmtPct, pnlColor, makeAlert } from '../../utils/format';
 import NetValueChart from '../Charts/NetValueChart';
@@ -47,7 +47,7 @@ const StrategyBacktestPanel = ({
     currentConfig,
     onLoadStrategy,
     setAlerts,
-    setRiskAnalysis,
+    onHistoryLoaded,
     onGoToRisk,
 }) => {
     // 回测日期独立管理（不依赖全局日期）
@@ -191,7 +191,12 @@ const StrategyBacktestPanel = ({
         try {
             const detail = await backtestApi.getDetail(record.id);
             if (detail?.result) {
-                setBacktestResults({ ...detail.result, strategy_type: detail.strategy_type });
+                // 委托父组件统一处理：设置回测结果、风险分析、组合优化、上下文
+                if (onHistoryLoaded) {
+                    await onHistoryLoaded(detail);
+                } else {
+                    setBacktestResults({ ...detail.result, strategy_type: detail.strategy_type });
+                }
                 if (detail.strategy_type) setStrategyType(detail.strategy_type);
 
                 // 回显标的池配置
@@ -223,18 +228,9 @@ const StrategyBacktestPanel = ({
                     setStrategyParamsValues(prev => ({ ...prev, ...sp }));
                 }
 
-                // 加载历史回测后调用后端计算风险指标
-                if (setRiskAnalysis && detail.start_date && detail.end_date) {
-                    const codes = detail.codes?.length ? detail.codes : customStocks.map(s => s.code);
-                    if (codes.length > 0) {
-                        try {
-                            const riskRes = await riskApi.analyze(codes, detail.start_date, detail.end_date);
-                            setRiskAnalysis(riskRes.risk || null);
-                        } catch { /* 风险计算失败不阻塞 */ }
-                    }
-                }
-
-                setAlerts([makeAlert('success', `已加载历史回测 (${STRATEGY_MAP[detail.strategy_type]?.name || detail.strategy_type} · ${detail.start_date}~${detail.end_date})`)]);
+                // 用追加模式发送成功提示，避免覆盖父组件可能已追加的 warning
+                const successMsg = `已加载历史回测 (${STRATEGY_MAP[detail.strategy_type]?.name || detail.strategy_type} · ${detail.start_date}~${detail.end_date})`;
+                setAlerts(prev => [...prev, makeAlert('success', successMsg)]);
                 requestAnimationFrame(() => requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })));
             } else {
                 setAlerts([makeAlert('warning', '该记录无完整结果数据，可能是旧版本格式')]);

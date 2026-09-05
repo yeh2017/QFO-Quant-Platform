@@ -17,12 +17,45 @@ import GlobalLoading from './components/common/GlobalLoading';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import useWebSocket from './hooks/useWebSocket';
 
+// ── 策略名映射（仅用于上下文标签显示） ──
+const STRATEGY_NAME_MAP = {
+    multifactor: '因子选股', timing: '均线择时', macd: '动量指标',
+    bband: '布林带回归', turtle: '海龟交易', volume_breakout: '放量突破',
+    grid: '网格交易', double_low_cb: '可转债双低', etf_momentum: 'ETF动量轮动',
+    event_driven: '事件驱动',
+};
+
 // ── localStorage 持久化工具 ──
 const STORAGE_KEYS = {
     stocks: 'qp_customStocks',
     bonds: 'qp_customBonds',
 };
 const loadJSON = (key, fallback) => { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
+
+// ── 回测上下文构造 helper ──
+const buildSourceLabel = ({ sourceType, codesCount, universeConfig }) => {
+    if (sourceType === 'pool') return `自选池 ${codesCount || 0} 只`;
+    if (sourceType === 'factor_filter') return `因子筛选 ${codesCount || universeConfig?.max_stocks || '?'} 只`;
+    if (sourceType === 'full_market') return `全市场 ${codesCount || universeConfig?.max_stocks || '?'} 只`;
+    return '未知来源';
+};
+
+const buildBacktestContext = ({ results, strategyType, targetCodes = null, universeConfig = null, startDate = null, endDate = null }) => {
+    const dates = results?.dates || [];
+    const sourceType = universeConfig?.type || 'pool';
+    const codesCount = targetCodes?.length || universeConfig?.max_stocks || 0;
+    return {
+        strategyType,
+        strategyName: STRATEGY_NAME_MAP[strategyType] || strategyType || '未知策略',
+        startDate: startDate || dates[0] || null,
+        endDate: endDate || dates[dates.length - 1] || null,
+        actualStartDate: results?.actual_start_date || dates[0] || startDate || null,
+        actualEndDate: results?.actual_end_date || dates[dates.length - 1] || endDate || null,
+        sourceType,
+        sourceLabel: buildSourceLabel({ sourceType, codesCount, universeConfig }),
+        codesCount,
+    };
+};
 
 const QuantPlatform = () => {
     // activeTab 固定默认"数据中台"，不从 localStorage 恢复，避免每次打开随机跳页
@@ -44,6 +77,7 @@ const QuantPlatform = () => {
     const [backtestResults, setBacktestResults] = useState(null);
     const [riskAnalysis, setRiskAnalysis] = useState(null);
     const [portfolio, setPortfolio] = useState(null);
+    const [backtestContext, setBacktestContext] = useState(null);
 
     // ── 同步状态 ──
     const [syncing, setSyncing] = useState(false);
@@ -68,6 +102,10 @@ const QuantPlatform = () => {
         };
     }, []);
 
+    const appendAlert = useCallback((alert) => {
+        setAlerts(prev => [...prev, alert]);
+    }, []);
+
 
     // ── 状态变化 → 写入 localStorage（仅持久化自选池，日期不持久化）──
     useEffect(() => { localStorage.setItem(STORAGE_KEYS.stocks, JSON.stringify(customStocks)); }, [customStocks]);
@@ -76,30 +114,95 @@ const QuantPlatform = () => {
     // ── WebSocket 推送（任务进度 + 新闻更新）──
     // ── 回测完成后的结果处理（WS 和轮询共用） ──
     const handleBacktestResult = useCallback(async (results, taskCtx) => {
-        setBacktestResults({ ...results, strategy_type: taskCtx.strategyType });
-        // 用后端 /risk/analyze 计算完整风险指标
-        try {
-            const codes = taskCtx.targetCodes || [...customStocks, ...customBonds].map(s => s.code);
-            const dates = results.dates || [];
-            if (codes.length > 0 && dates.length >= 2) {
-                const res = await riskApi.analyze(codes, dates[0], dates[dates.length - 1]);
+        const enrichedResults = { ...results, strategy_type: taskCtx.strategyType };
+        setBacktestResults(enrichedResults);
+        setBacktestContext(buildBacktestContext({
+            results: enrichedResults,
+            strategyType: taskCtx.strategyType,
+            targetCodes: taskCtx.targetCodes,
+            universeConfig: taskCtx.universeConfig,
+            startDate: taskCtx.startDate,
+            endDate: taskCtx.endDate,
+        }));
+
+        const dates = enrichedResults.dates || [];
+        const riskCodes = taskCtx.targetCodes || [...customStocks, ...customBonds].map(s => s.code);
+        if (riskCodes.length > 0 && dates.length >= 2) {
+            try {
+                const res = await riskApi.analyze(riskCodes, dates[0], dates[dates.length - 1]);
                 setRiskAnalysis(res.risk || null);
+            } catch (e) {
+                console.warn('Backtest risk analysis failed:', e);
+                appendAlert(makeAlert('warning', `回测完成，但风险分析失败：${e.message}`));
             }
-        } catch { /* risk 失败不阻塞 */ }
-        // 固定池才做组合优化
+        }
+
         if (taskCtx.targetCodes && taskCtx.targetCodes.length > 0) {
             try {
                 const allStocks = [...customStocks, ...customBonds];
                 const stockNames = Object.fromEntries(allStocks.map(s => [s.code, s.name || s.code]));
                 const res = await portfolioOptApi.optimizeAll(taskCtx.targetCodes, 252, stockNames);
                 setPortfolio(res?.results || null);
-            } catch { setPortfolio(null); }
+            } catch (e) {
+                console.warn('Backtest portfolio optimization failed:', e);
+                setPortfolio(null);
+                appendAlert(makeAlert('warning', `回测完成，但组合优化失败：${e.message}`));
+            }
         } else {
             setPortfolio(null);
         }
-        setAlerts([makeAlert('success', '回测完成')]);
+
+        appendAlert(makeAlert('success', '回测完成'));
         setLoading(false);
-    }, [customStocks, customBonds]);
+    }, [customStocks, customBonds, appendAlert]);
+
+    // ── 历史回测加载后的统一处理（风险+组合+上下文+成功提示） ──
+    const handleHistoryLoaded = useCallback(async (detail) => {
+        if (!detail?.result) return false;
+
+        const enrichedResults = { ...detail.result, strategy_type: detail.strategy_type };
+        setBacktestResults(enrichedResults);
+        setBacktestContext(buildBacktestContext({
+            results: enrichedResults,
+            strategyType: detail.strategy_type,
+            targetCodes: detail.codes?.length ? detail.codes : null,
+            universeConfig: detail.universe_config || null,
+            startDate: detail.start_date,
+            endDate: detail.end_date,
+        }));
+
+        const codes = detail.codes?.length ? detail.codes : [...customStocks, ...customBonds].map(s => s.code);
+
+        if (codes.length > 0 && detail.start_date && detail.end_date) {
+            try {
+                const riskRes = await riskApi.analyze(codes, detail.start_date, detail.end_date);
+                setRiskAnalysis(riskRes.risk || null);
+            } catch (e) {
+                console.warn('History risk analysis failed:', e);
+                setRiskAnalysis(null);
+                appendAlert(makeAlert('warning', `历史回测已加载，但风险分析失败：${e.message}`));
+            }
+        } else {
+            setRiskAnalysis(null);
+        }
+
+        if (detail.codes?.length) {
+            try {
+                const allStocks = [...customStocks, ...customBonds];
+                const stockNames = Object.fromEntries(allStocks.map(s => [s.code, s.name || s.code]));
+                const res = await portfolioOptApi.optimizeAll(detail.codes, 252, stockNames);
+                setPortfolio(res?.results || null);
+            } catch (e) {
+                console.warn('History portfolio optimization failed:', e);
+                setPortfolio(null);
+                appendAlert(makeAlert('warning', `历史回测已加载，但组合优化失败：${e.message}`));
+            }
+        } else {
+            setPortfolio(null);
+        }
+
+        return true;  // 表示已完整处理，子组件不需要再发 alert
+    }, [customStocks, customBonds, appendAlert]);
 
     const handleWsMessage = useCallback((msg) => {
 
@@ -231,6 +334,8 @@ const QuantPlatform = () => {
         setLoading(true);
         setBacktestResults(null);
         setRiskAnalysis(null);
+        setPortfolio(null);
+        setBacktestContext(null);
         try {
             const targetCodes = universeConfig ? null : allStocks.map(s => s.code);
 
@@ -243,7 +348,12 @@ const QuantPlatform = () => {
             });
 
             // 存入 ref 供 WS 回调使用（快照提交时的上下文）
-            backtestTaskIdRef.current = { taskId: task_id, targetCodes, strategyType };
+            backtestTaskIdRef.current = {
+                taskId: task_id, targetCodes, strategyType,
+                universeConfig,
+                startDate: backtestDates?.startDate,
+                endDate: backtestDates?.endDate,
+            };
             setAlerts([makeAlert('info', `回测任务已提交 (ID: ${task_id.slice(0, 8)}...)，等待结果...`)]);
 
             // 轮询 fallback（3 秒一次，WS 正常时不会用到）
@@ -334,7 +444,8 @@ const QuantPlatform = () => {
                         {alerts.map((alert, idx) => (
                             <div key={idx} className={`p-3 rounded-lg flex items-center gap-2 border ${alert.type === 'success' ? 'bg-green-900/30 border-green-500/50 text-green-200' :
                                 alert.type === 'error' ? 'bg-red-900/30 border-red-500/50 text-red-200' :
-                                    'bg-blue-900/30 border-blue-500/50 text-blue-200'
+                                    alert.type === 'warning' ? 'bg-amber-900/30 border-amber-500/50 text-amber-200' :
+                                        'bg-blue-900/30 border-blue-500/50 text-blue-200'
                                 }`}>
                                 <AlertCircle className="w-4 h-4" />
                                 {alert.msg}
@@ -440,7 +551,7 @@ const QuantPlatform = () => {
                                 }}
                                 onLoadStrategy={handleLoadStrategy}
                                 setAlerts={setAlerts}
-                                setRiskAnalysis={setRiskAnalysis}
+                                onHistoryLoaded={handleHistoryLoaded}
                                 onGoToRisk={() => setActiveTab('risk')}
                             />
                         </ErrorBoundary>
@@ -453,6 +564,7 @@ const QuantPlatform = () => {
                                 customStocks={[...customStocks, ...customBonds]}
                                 onViewKline={(code) => { setPendingStock(code); setActiveTab('visual'); }}
                                 setAlerts={setAlerts}
+                                backtestContext={backtestContext}
                             />
                         </ErrorBoundary>
                     </div>
@@ -465,6 +577,7 @@ const QuantPlatform = () => {
                                 onResult={(r) => setRiskAnalysis(r)}
                                 cumReturns={backtestResults?.cumReturns}
                                 dates={backtestResults?.dates}
+                                backtestContext={backtestContext}
                             />
                         </ErrorBoundary>
                     </div>

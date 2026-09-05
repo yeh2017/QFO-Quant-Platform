@@ -63,9 +63,13 @@ jobs:
               --clobber
             exit 0
           fi
+          NOTES_ARG="--generate-notes"
+          if [ -f "RELEASE_NOTES.md" ]; then
+            NOTES_ARG="--notes-file RELEASE_NOTES.md"
+          fi
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
             --title "QFO量化回测平台 $VERSION" \
-            --generate-notes \
+            $NOTES_ARG \
             QFO-Quant-Platform.zip \
             SHA256SUMS.txt

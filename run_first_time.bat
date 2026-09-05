@@ -7,7 +7,7 @@ set "BACKEND=%ROOT%backend"
 set "FRONTEND=%ROOT%frontend"
 set "VENV_PYTHON=%BACKEND%\.venv\Scripts\python.exe"
 set "VENV_PIP=%BACKEND%\.venv\Scripts\pip.exe"
-set "PIP_MIRROR=-i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn"
+set "PIP_MIRROR=-i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com"
 
 echo ==========================================
 echo      Quant Platform - Launcher v2
@@ -45,10 +45,10 @@ if %errorlevel% neq 0 goto rebuild_venv
 
 :: Check all critical runtime packages
 "%VENV_PYTHON%" -c "import uvicorn, fastapi, pandas, sqlalchemy, jinja2, structlog" >nul 2>&1
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo   [WARN] Missing packages, installing...
-    "%VENV_PIP%" install -r "%BACKEND%\requirements.txt" %PIP_MIRROR%
-    if %errorlevel% neq 0 goto fail
+    call :install_backend_deps
+    if errorlevel 1 goto fail
 )
 echo   [OK] .venv ready
 goto venv_ok
@@ -56,13 +56,13 @@ goto venv_ok
 :create_venv
 echo   [INFO] .venv not found, creating...
 python -m venv "%BACKEND%\.venv"
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo   [FAIL] Failed to create .venv
     goto fail
 )
-echo   [INFO] Installing dependencies (this may take 5-10 minutes)...
-"%VENV_PIP%" install -r "%BACKEND%\requirements.txt" %PIP_MIRROR%
-if %errorlevel% neq 0 (
+echo   [INFO] Installing dependencies (this may take 3-5 minutes)...
+call :install_backend_deps
+if errorlevel 1 (
     echo   [FAIL] pip install failed
     goto fail
 )
@@ -73,13 +73,13 @@ goto venv_ok
 echo   [INFO] .venv broken, rebuilding...
 rmdir /s /q "%BACKEND%\.venv" 2>nul
 python -m venv "%BACKEND%\.venv"
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo   [FAIL] Failed to create .venv
     goto fail
 )
-echo   [INFO] Installing dependencies (this may take 5-10 minutes)...
-"%VENV_PIP%" install -r "%BACKEND%\requirements.txt" %PIP_MIRROR%
-if %errorlevel% neq 0 (
+echo   [INFO] Installing dependencies (this may take 3-5 minutes)...
+call :install_backend_deps
+if errorlevel 1 (
     echo   [FAIL] pip install failed
     goto fail
 )
@@ -96,19 +96,23 @@ if not exist "%FRONTEND%\package.json" (
 )
 if not exist "%FRONTEND%\node_modules" (
     echo   [INFO] node_modules not found, installing...
-    pushd "%FRONTEND%"
-    call npm install
-    popd
+    call :install_frontend_deps
+    if %errorlevel% neq 0 (
+        echo   [FAIL] npm install failed!
+        goto fail
+    )
 ) else (
     :: Verify node_modules is compatible (vite must be runnable)
     pushd "%FRONTEND%"
     call npx vite --version >nul 2>&1
-    if %errorlevel% neq 0 (
-        echo   [WARN] node_modules broken, reinstalling...
-        rmdir /s /q node_modules 2>nul
-        call npm install
-    )
+    set "VITE_ERR=%errorlevel%"
     popd
+    if not "%VITE_ERR%"=="0" (
+        echo   [WARN] node_modules broken, reinstalling...
+        rmdir /s /q "%FRONTEND%\node_modules" 2>nul
+        call :install_frontend_deps
+        if %errorlevel% neq 0 goto fail
+    )
 )
 echo   [OK] Frontend ready
 
@@ -173,7 +177,9 @@ if %errorlevel% equ 0 (
 )
 
 :: Start backend
-start "Backend" cmd /k "cd /d %BACKEND% && .venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+pushd "%BACKEND%"
+start "Backend" cmd /k ".venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+popd
 
 :: Wait for backend (initial 5s + max 30s polling)
 echo   Waiting for backend to initialize...
@@ -195,7 +201,9 @@ if %errorlevel% neq 0 (
 echo   [OK] Backend is ready!
 
 :start_fe
-start "Frontend" cmd /k "cd /d %FRONTEND% && npx vite --port 3000"
+pushd "%FRONTEND%"
+start "Frontend" cmd /k "npx vite --port 3000"
+popd
 
 echo.
 echo ==========================================
@@ -218,3 +226,42 @@ echo   STARTUP FAILED - see errors above
 echo ==========================================
 echo.
 pause
+exit /b 1
+
+:: ==========================================
+:: Helper subroutines with auto fallback
+:: ==========================================
+
+:install_backend_deps
+echo   [INFO] Installing backend dependencies...
+echo   - [1/3] Trying Aliyun mirror...
+"%VENV_PIP%" install -r "%BACKEND%\requirements.txt" -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
+if not errorlevel 1 exit /b 0
+
+echo   - [2/3] Aliyun mirror failed, trying Tencent Cloud mirror...
+"%VENV_PIP%" install -r "%BACKEND%\requirements.txt" -i https://mirrors.cloud.tencent.com/pypi/simple/ --trusted-host mirrors.cloud.tencent.com
+if not errorlevel 1 exit /b 0
+
+echo   - [3/3] Domestic mirrors failed, trying official PyPI...
+"%VENV_PIP%" install -r "%BACKEND%\requirements.txt"
+if not errorlevel 1 exit /b 0
+
+echo   - [FAIL] All pip mirrors failed. Please check network/DNS settings.
+exit /b 1
+
+:install_frontend_deps
+pushd "%FRONTEND%"
+echo   - [1/2] Installing frontend packages via npm...
+call npm install
+if not errorlevel 1 (
+    popd
+    exit /b 0
+)
+echo   - [2/2] Default npm registry failed, retrying with npmmirror...
+call npm install --registry=https://registry.npmmirror.com
+if not errorlevel 1 (
+    popd
+    exit /b 0
+)
+popd
+exit /b 1

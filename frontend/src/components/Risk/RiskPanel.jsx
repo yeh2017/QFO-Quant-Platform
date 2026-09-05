@@ -20,7 +20,7 @@ const MetricCard = ({ label, sub, value, color = 'text-white', tooltip }) => (
     </div>
 );
 
-const RiskPanel = ({ riskAnalysis: backtestRisk, customStocks = [], onResult, cumReturns, dates }) => {
+const RiskPanel = ({ riskAnalysis: backtestRisk, customStocks = [], onResult, cumReturns, dates, backtestContext = null }) => {
     const [riskData, setRiskData] = useState(backtestRisk || null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -96,6 +96,18 @@ const RiskPanel = ({ riskAnalysis: backtestRisk, customStocks = [], onResult, cu
                     </button>
                 </div>
             </div>
+
+            {/* 回测来源标签 */}
+            {backtestContext && (
+                <div className="text-xs text-purple-300 bg-purple-900/20 border border-purple-700/30 rounded-lg px-3 py-1.5 inline-flex items-center gap-1.5">
+                    <span>📎</span>
+                    <span>{backtestContext.strategyName}</span>
+                    <span className="text-slate-500">·</span>
+                    <span>{backtestContext.actualStartDate || backtestContext.startDate} ~ {backtestContext.actualEndDate || backtestContext.endDate}</span>
+                    <span className="text-slate-500">·</span>
+                    <span>{backtestContext.sourceLabel}</span>
+                </div>
+            )}
 
             {/* 数据充足性提示 */}
             {dataRangeInfo && (
