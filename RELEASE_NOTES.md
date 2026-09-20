@@ -18,3 +18,7 @@
 - **依赖审计修复**：清理了 `backend/utils/ssl_fix.py` 中未在 `requirements.txt` 声明且从未生效的冗余 `httpx` 备用导入，严格遵守 KISS 原则。
 - **FastAPI 0.141+ 兼容**：优化路由反射机制，全面兼容新版 Starlette/FastAPI 的内部结构。
 - **自动化测试 100% 通过**：通过 69 项前端单测（Vitest）、66 项后端单测（Pytest）以及 34 项平台架构质量审计规范。
+
+### ⬆️ 从旧版本升级
+
+建议把新版本解压到独立目录，不要直接覆盖旧版本。需要保留本地数据库时，请先阅读：[更新到新版本，如何复制并迁移原有数据](docs/upgrade-data-migration.md)。
