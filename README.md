@@ -80,6 +80,7 @@ QFO 是一个面向 A 股量化分析的本地化量化回测平台，适合在�
 > **注意**
 > - 请勿直接在压缩包内运行。
 > - 需要使用 [Python（下载链接）](https://www.python.org/downloads/windows/)、[Node.js（下载链接）](https://nodejs.org/en/download) 运行环境。
+> - 从旧版本升级时，请先阅读：[更新到新版本，如何复制并迁移原有数据](docs/upgrade-data-migration.md)。
 
 ### 1. 环境要求
 
