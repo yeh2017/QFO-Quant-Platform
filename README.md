@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://github.com/yeh2017/QFO-Quant-Platform/releases/latest/download/QFO-Quant-Platform.zip"><strong>下载稳定版</strong></a> ·
   <a href="https://www.qfo-quant-platform.com/"><strong>新手教学网站</strong></a> ·
-  <a href="https://www.bilibili.com/video/BV1yDbQ6cEW7/"><strong>73秒项目总览</strong></a> ·
+  <a href="https://www.qfo-quant-platform.com/#video"><strong>项目演示</strong></a> ·
   <a href="https://www.bilibili.com/video/BV18Cby6XEfR/"><strong>完整视频教程</strong></a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#产品预览">产品预览</a> ·
@@ -35,10 +35,10 @@
 </p>
 
 <p align="center">
-  <a href="https://www.bilibili.com/video/BV1yDbQ6cEW7/"><img src="assets/preview/qfo-73s-overview.webp" alt="QFO 73秒项目总览" width="760"></a>
+  <a href="https://www.qfo-quant-platform.com/#video"><img src="assets/preview/qfo-project-demo.webp" alt="QFO 项目演示" width="760"></a>
 </p>
 
-<p align="center"><sub>点击封面观看 73 秒项目总览</sub></p>
+<p align="center"><sub>点击封面观看项目演示</sub></p>
 
 ## 项目亮点
 
