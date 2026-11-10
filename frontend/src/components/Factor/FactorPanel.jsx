@@ -134,6 +134,10 @@ const FactorPanel = ({
 
             if (setAlerts) {
                 const newAlerts = [];
+                // 非股票标的跳过提示（info 级别，非异常）
+                if (result.skipped_info) {
+                    newAlerts.push({ type: 'info', msg: result.skipped_info });
+                }
                 if (result.errors?.length > 0) {
                     result.errors.forEach(err => newAlerts.push({ type: 'warning', msg: err }));
                     newAlerts.push({ type: 'success', msg: `✓ 成功计算 ${result.total} 只股票，但有 ${result.errors.length} 个异常` });

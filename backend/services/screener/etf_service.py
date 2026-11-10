@@ -491,9 +491,9 @@ def etf_smart_screen(db: Session, *, top_n: int = 20, category: str = None, sub_
             "benchmark": bm_clean,
             "close": round(today_close, 3),
             "pct_chg": round(today_chg, 2),
-            "amount": round(float(bar.amount or 0), 0),
+            "amount": round(float(bar.amount or 0) / 10, 0),  # 千元→万元
             "pct_chg_20d": pct_20d,
-            "avg_amount_20d": round(avg_amount, 0),
+            "avg_amount_20d": round(avg_amount / 10, 0),  # 千元→万元
             "pct_chg_1y": pct_1y,
             "score": round(composite, 1), "reversal": reversal,
         })

@@ -222,10 +222,18 @@ class StockService:
                 # 将列名复原回历史兼容的名字
                 rename_map = {'trade_date': 'date'}
                 # 可转债 ConvertibleBondBar 字段名是 turnover，统一映射为 amount
-                if 'turnover' in df.columns and 'amount' not in df.columns:
+                is_bond_bar = 'turnover' in df.columns and 'amount' not in df.columns
+                if is_bond_bar:
                     rename_map['turnover'] = 'amount'
                 df = df.rename(columns=rename_map)
                 df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+
+                # 成交额单位归一化为元（Tushare 各品种原始单位不同）
+                # 股票/ETF: amount 原始单位为千元 → ×1000 → 元
+                # 可转债: turnover 原始单位为万元 → ×10000 → 元
+                if 'amount' in df.columns:
+                    amt_factor = 10000 if is_bond_bar else 1000
+                    df['amount'] = df['amount'] * amt_factor
 
                 # ---- 复权处理（数据库存的是不复权原价）----
                 price_cols = ['open', 'high', 'low', 'close']
