@@ -130,18 +130,22 @@ class StockPoolResolver:
         return ["600519.SH", "000001.SZ"]  # 最终兜底
 
     def _resolve_all(self) -> List[str]:
-        """从本地 StockBasicInfo 表获取全市场（含已退市，消除存活偏差）"""
+        """从本地 StockBasicInfo 表获取全市场活跃股票（同步用途）
+
+        注意：回测存活偏差修复由 universe_provider.FullMarketUniverse 负责，
+        此处仅用于数据同步，只需拉取活跃股票即可。
+        """
         try:
             from core.database import db_session
             from models.quant_data import StockBasicInfo
 
             with db_session() as db:
-                # 不过滤 is_active：已退市股票也应包含在回测标的池中
-                # 无行情数据的标的会在 _load_price_matrix 中自动被过滤
-                rows = db.query(StockBasicInfo.code).all()
+                rows = db.query(StockBasicInfo.code).filter(
+                    StockBasicInfo.is_active == True
+                ).all()
                 if rows:
                     codes = [r.code for r in rows]
-                    log.info("resolve_all", count=len(codes), note="includes_delisted")
+                    log.info("resolve_all", count=len(codes))
                     return codes
         except Exception as e:
             log.error("resolve_all_failed", error=str(e))

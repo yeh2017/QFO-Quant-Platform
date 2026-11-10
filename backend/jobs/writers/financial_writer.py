@@ -32,7 +32,8 @@ class FinancialWriter:
 
         if "end_date" in df.columns:
             df = df.drop_duplicates(subset=["end_date"], keep="first")
-            df = df.sort_values("end_date", ascending=False).head(4)
+            # 保留最近 8 期（2 年），覆盖多期财务因子回测（ROE趋势等）+ ann_date 不可逆保留
+            df = df.sort_values("end_date", ascending=False).head(8)
 
         # 直接 upsert，不清空历史——ON CONFLICT DO UPDATE SET 会覆盖已有期数
 
