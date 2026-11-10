@@ -1,5 +1,7 @@
 <h1 align="center">QFO量化回测平台</h1>
 
+> 当前分支为 **v1.0.3 候选版**；已发布的稳定版仍为 **v1.0.2**。首次安装兼容修复和依赖漏洞处理进度见 [发布说明](RELEASE_NOTES.md)。
+
 <p align="center">
   <strong>免费开源、本地运行的 A 股量化研究与回测平台</strong>
 </p>
