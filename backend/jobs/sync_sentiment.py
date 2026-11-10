@@ -99,7 +99,7 @@ def _sync_moneyflow(ts_source, sent_writer, codes: list, start_date: str, end_da
                 trade_date_obj = pd.to_datetime(td, format="%Y%m%d").date()
                 with db_session() as db:
                     n = sent_writer.upsert_moneyflow_batch(db, df_mf, trade_date_obj, target_set)
-                    inserted_rows += (n or len(df_mf))
+                    inserted_rows += n
             else:
                 consecutive_empty += 1
                 log.debug("moneyflow_empty_day", trade_date=td, consecutive=consecutive_empty)
