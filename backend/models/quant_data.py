@@ -136,6 +136,7 @@ class StockFinancial(Base):
 
     code = Column(String(20), primary_key=True, comment="股票代码")
     report_date = Column(Date, primary_key=True, comment="报告期 (如 2024-12-31)")
+    ann_date = Column(Date, nullable=True, comment="实际公告日期（PIT 查询用）")
 
     roe = Column(Float, nullable=True, comment="净资产收益率(%)")
     roa = Column(Float, nullable=True, comment="总资产收益率(%)")

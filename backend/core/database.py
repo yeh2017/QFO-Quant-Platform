@@ -171,8 +171,8 @@ def migrate_stock_news():
 
 
 def migrate_financial_columns():
-    """安全补全 stock_financials 表中质量因子新增列（幂等）"""
+    """安全补全 stock_financials 表中质量因子与PIT公告日新增列（幂等）"""
     _migrate_table("stock_financials", {
-        "cashflow_oper": "REAL", "debt_to_assets": "REAL",
+        "cashflow_oper": "REAL", "debt_to_assets": "REAL", "ann_date": "DATE",
     })
 

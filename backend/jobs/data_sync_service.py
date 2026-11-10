@@ -808,11 +808,12 @@ class DataSyncService:
         return should_skip(data_type, effective_mode, min_interval_hours)
 
     def _should_skip_financial(self, mode: str) -> bool:
-        """财报季才拉：1/4/7/8/10月拉（间隔7天），其余月份跳过"""
+        """财报披露期才拉（间隔7天），6/12月跳过"""
         from datetime import datetime
         month = datetime.now().month
-        # 财报季：年报1-4月，一季报4月，中报7-8月，三季报10月
-        earnings_months = {1, 2, 3, 4, 7, 8, 10}
+        # 财报披露窗口（含长尾）：年报1-4月 + 5月补录，中报7-9月，三季报10-11月
+        # 仅 6/12 月无任何财报截止日，安全跳过
+        earnings_months = {1, 2, 3, 4, 5, 7, 8, 9, 10, 11}
         if month not in earnings_months:
             log.info("skip_financial_non_earnings_season", month=month)
             return True
@@ -820,10 +821,10 @@ class DataSyncService:
         return self._should_skip("financials", mode, min_interval_hours=168)
 
     def _should_skip_shareholder(self, mode: str) -> bool:
-        """股东户数跟财报季：财报季内 7 天拉一次，非财报季跳过"""
+        """股东户数跟财报披露期：披露期内 7 天拉一次，6/12月跳过"""
         from datetime import datetime
         month = datetime.now().month
-        earnings_months = {1, 2, 3, 4, 7, 8, 10}
+        earnings_months = {1, 2, 3, 4, 5, 7, 8, 9, 10, 11}
         if month not in earnings_months:
             log.info("skip_shareholder_non_earnings_season", month=month)
             return True
