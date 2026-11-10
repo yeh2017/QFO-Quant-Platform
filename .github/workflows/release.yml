@@ -32,6 +32,28 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Verify backend
+        working-directory: backend
+        run: |
+          python -X utf8 -m pip install -r requirements.txt
+          python -X utf8 -m pytest tests/test_core.py tests/test_schema.py tests/test_asset_type.py tests/test_sentiment_llm.py tests/test_backtest_correctness.py -q
+
+      - name: Verify frontend
+        working-directory: frontend
+        run: |
+          npm ci --no-fund
+          npm audit --audit-level=high
+          npm test
+          npm run build
+
       - name: Build release assets
         env:
           TAG: ${{ steps.version.outputs.tag }}

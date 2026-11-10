@@ -2,6 +2,9 @@
     "name": "backtrader-platform",
     "version": "1.0.3",
     "private": true,
+    "engines": {
+        "node": ">=22.12.0"
+    },
     "type": "module",
     "scripts": {
         "dev": "concurrently -n backend,frontend -c blue,green \"powershell -Command cd ../backend; .venv/Scripts/python.exe main.py\" \"vite\"",
@@ -20,12 +23,12 @@
         "recharts": "^3.7.0"
     },
     "devDependencies": {
-        "@vitejs/plugin-react": "^4.2.1",
+        "@vitejs/plugin-react": "6.3.0",
         "autoprefixer": "^10.4.16",
         "concurrently": "^9.2.1",
         "postcss": "^8.4.32",
         "tailwindcss": "^3.3.6",
-        "vite": "^5.0.8",
-        "vitest": "^4.1.8"
+        "vite": "8.3.7",
+        "vitest": "4.1.12"
     }
 }

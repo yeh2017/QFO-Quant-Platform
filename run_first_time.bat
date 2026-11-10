@@ -1,267 +1,210 @@
 @echo off
+setlocal
 chcp 65001 >nul 2>&1
-title Quant Platform - Launcher
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+title QFO Launcher
 
 set "ROOT=%~dp0"
 set "BACKEND=%ROOT%backend"
 set "FRONTEND=%ROOT%frontend"
 set "VENV_PYTHON=%BACKEND%\.venv\Scripts\python.exe"
-set "VENV_PIP=%BACKEND%\.venv\Scripts\pip.exe"
-set "PIP_MIRROR=-i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com"
 
 echo ==========================================
-echo      Quant Platform - Launcher v2
+echo      QFO - Windows Launcher
 echo ==========================================
-echo.
 echo   ROOT: %ROOT%
 echo.
 
-:: 1. Python
-echo [1/5] Checking Python...
-where python >nul 2>&1
-if %errorlevel% neq 0 (
-    echo   [FAIL] Python not found in PATH!
+echo [1/5] Checking Python 3.12 or newer...
+call :select_python
+if not defined PYTHON_EXE (
+    echo   [FAIL] Python 3.12 or newer was not found. Install Python and run again.
     goto fail
 )
-for /f "tokens=2 delims= " %%v in ('python --version 2^>^&1') do set "PYVER=%%v"
-echo   [OK] Python %PYVER%
+"%PYTHON_EXE%" --version
+echo   [OK] Using: %PYTHON_EXE%
 
-:: 2. Node.js
-echo [2/5] Checking Node.js...
-where node >nul 2>&1
-if %errorlevel% neq 0 (
-    echo   [FAIL] Node.js not found in PATH!
+echo [2/5] Checking Node.js 22.12 or newer...
+node -e "const v=process.versions.node.split('.').map(Number); process.exit(v[0]>22 || v[0]===22 && v[1]>=12 ? 0 : 1)" >nul 2>&1
+if errorlevel 1 (
+    echo   [FAIL] Node.js 22.12 or newer is required. Install it and run again.
     goto fail
 )
-for /f "tokens=1 delims= " %%v in ('node --version 2^>^&1') do set "NODEVER=%%v"
-echo   [OK] Node.js %NODEVER%
+node --version
 
-:: 3. Backend venv
-echo [3/5] Checking backend virtual environment...
+echo [3/5] Checking backend environment...
 if not exist "%VENV_PYTHON%" goto create_venv
-
-"%VENV_PYTHON%" -c "import sys; print(sys.version)" >nul 2>&1
-if %errorlevel% neq 0 goto rebuild_venv
-
-:: Check all critical runtime packages
-"%VENV_PYTHON%" -c "import uvicorn, fastapi, pandas, sqlalchemy, jinja2, structlog" >nul 2>&1
-if errorlevel 1 (
-    echo   [WARN] Missing packages, installing...
-    call :install_backend_deps
-    if errorlevel 1 goto fail
-)
-echo   [OK] .venv ready
-goto venv_ok
-
-:create_venv
-echo   [INFO] .venv not found, creating...
-python -m venv "%BACKEND%\.venv"
-if errorlevel 1 (
-    echo   [FAIL] Failed to create .venv
-    goto fail
-)
-echo   [INFO] Installing dependencies (this may take 3-5 minutes)...
-call :install_backend_deps
-if errorlevel 1 (
-    echo   [FAIL] pip install failed
-    goto fail
-)
-echo   [OK] .venv created
-goto venv_ok
+"%VENV_PYTHON%" -X utf8 -c "import sys; sys.exit(0 if sys.version_info >= (3,12) else 1)" >nul 2>&1
+if errorlevel 1 goto rebuild_venv
+goto check_backend
 
 :rebuild_venv
-echo   [INFO] .venv broken, rebuilding...
-rmdir /s /q "%BACKEND%\.venv" 2>nul
-python -m venv "%BACKEND%\.venv"
+echo   [INFO] Keeping the incompatible environment as a backup...
+ren "%BACKEND%\.venv" ".venv-backup-%RANDOM%"
+if errorlevel 1 goto fail
+
+:create_venv
+"%PYTHON_EXE%" -X utf8 -m venv "%BACKEND%\.venv"
+if errorlevel 1 goto fail
+
+:check_backend
+"%VENV_PYTHON%" -X utf8 -m pip --version >nul 2>&1
+if not errorlevel 1 goto check_backend_imports
+"%VENV_PYTHON%" -X utf8 -m ensurepip --upgrade
+if errorlevel 1 goto fail
+
+:check_backend_imports
+call :backend_ready >nul 2>&1
+if errorlevel 1 call :install_backend_deps
+if errorlevel 1 goto fail
+call :backend_ready
 if errorlevel 1 (
-    echo   [FAIL] Failed to create .venv
+    echo   [FAIL] Backend dependencies could not be imported. See the error above.
     goto fail
 )
-echo   [INFO] Installing dependencies (this may take 3-5 minutes)...
-call :install_backend_deps
-if errorlevel 1 (
-    echo   [FAIL] pip install failed
-    goto fail
-)
-echo   [OK] .venv rebuilt
+echo   [OK] Backend dependencies ready
 
-:venv_ok
-echo   [OK] Backend ready
-
-:: 4. Frontend check
-echo [4/5] Checking frontend...
+echo [4/5] Checking frontend dependencies...
 if not exist "%FRONTEND%\package.json" (
-    echo   [FAIL] frontend\package.json not found!
+    echo   [FAIL] frontend\package.json is missing. Extract the complete package.
     goto fail
 )
-if not exist "%FRONTEND%\node_modules" (
-    echo   [INFO] node_modules not found, installing...
-    call :install_frontend_deps
-    if %errorlevel% neq 0 (
-        echo   [FAIL] npm install failed!
-        goto fail
-    )
-) else (
-    :: Verify node_modules is compatible (vite must be runnable)
-    pushd "%FRONTEND%"
-    call npx vite --version >nul 2>&1
-    set "VITE_ERR=%errorlevel%"
-    popd
-    if not "%VITE_ERR%"=="0" (
-        echo   [WARN] node_modules broken, reinstalling...
-        rmdir /s /q "%FRONTEND%\node_modules" 2>nul
-        call :install_frontend_deps
-        if %errorlevel% neq 0 goto fail
-    )
+call :frontend_ready
+if errorlevel 1 call :install_frontend_deps
+if errorlevel 1 goto fail
+call :frontend_ready
+if errorlevel 1 (
+    echo   [FAIL] Vite could not start. See the error above.
+    goto fail
 )
-echo   [OK] Frontend ready
+echo   [OK] Frontend dependencies ready
 
-:: 5. .env check
-if not exist "%BACKEND%\.env" (
-    if exist "%BACKEND%\.env.example" (
-        echo   [INFO] .env not found, creating from .env.example...
-        copy "%BACKEND%\.env.example" "%BACKEND%\.env" >nul
-    ) else (
-        echo   [INFO] .env not found, generating default config...
-        (
-            echo # Data Source
-            echo TUSHARE_TOKEN=
-            echo TUSHARE_POINTS=2000
-            echo TAVILY_API_KEY=
-            echo.
-            echo # Service
-            echo API_HOST=0.0.0.0
-            echo API_PORT=8000
-            echo TQDM_DISABLE=1
-            echo NEWS_AUTO_FETCH_HOURS=0
-            echo.
-            echo # LLM Providers
-            echo LLM_CHANNELS=siliconflow,anspire
-            echo LLM_SILICONFLOW_URL=https://api.siliconflow.cn/v1/chat/completions
-            echo LLM_SILICONFLOW_KEY=
-            echo LLM_SILICONFLOW_MODEL=deepseek-ai/DeepSeek-V4-Flash
-            echo LLM_ANSPIRE_URL=https://open-gateway.anspire.cn/v6/chat/completions
-            echo LLM_ANSPIRE_KEY=
-            echo LLM_ANSPIRE_MODEL=deepseek-v4-flash
-            echo ERNIE_BATCH_SIZE=10
-            echo LLM_MONTHLY_BUDGET=15
-        ) > "%BACKEND%\.env"
-    )
-    echo   [OK] .env created
-    echo.
-    echo   ==========================================
-    echo     First Run - Configuration Required
-    echo   ==========================================
-    echo     Browser will open shortly.
-    echo     Click [Manage] to configure:
-    echo       1. Tushare Token   [required]
-    echo       2. AI Model Keys   [optional]
-    echo       3. Tavily API Key  [optional]
-    echo.
-    echo     Fill once, saved permanently.
-    echo   ==========================================
-    echo.
-) else (
-    echo   [OK] .env exists
+if exist "%BACKEND%\.env" goto env_ready
+copy "%BACKEND%\.env.example" "%BACKEND%\.env" >nul
+if errorlevel 1 (
+    echo   [FAIL] Could not create .env from .env.example.
+    goto fail
 )
+echo   [INFO] Configure your Tushare Token in Settings after startup.
+:env_ready
+echo   [OK] .env exists
+if /i "%~1"=="--prepare-only" exit /b 0
 
-echo.
 echo [5/5] Starting services...
-echo.
-
-:: Check if backend already running
-powershell -Command "try{$null=Invoke-WebRequest 'http://localhost:8000/api/data_center/status' -TimeoutSec 2 -UseBasicParsing;exit 0}catch{exit 1}" >nul 2>&1
-if %errorlevel% equ 0 (
-    echo   [OK] Backend already running, skipping startup
-    goto start_fe
+if not exist "%BACKEND%\logs" mkdir "%BACKEND%\logs"
+call :backend_http_ready
+if not errorlevel 1 goto start_frontend
+powershell -NoProfile -Command "$ErrorActionPreference='Stop'; Start-Process -FilePath $env:VENV_PYTHON -ArgumentList @('-X','utf8','-m','uvicorn','main:app','--host','127.0.0.1','--port','8000') -WorkingDirectory $env:BACKEND -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:BACKEND 'logs\backend.stdout.log') -RedirectStandardError (Join-Path $env:BACKEND 'logs\backend.stderr.log')"
+if errorlevel 1 goto fail
+set "TRIES=0"
+:wait_backend
+call :backend_http_ready
+if not errorlevel 1 goto start_frontend
+set /a TRIES+=1 >nul
+if %TRIES% geq 30 (
+    echo   [FAIL] Backend is not ready. Check backend\logs\backend.stderr.log.
+    echo   Close any other QFO instance using port 8000 and try again.
+    goto fail
 )
+powershell -NoProfile -Command "Start-Sleep -Seconds 1"
+goto wait_backend
 
-:: Start backend
-pushd "%BACKEND%"
-start "Backend" cmd /k ".venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
-popd
-
-:: Wait for backend (initial 5s + max 30s polling)
-echo   Waiting for backend to initialize...
-timeout /t 5 /nobreak >nul
-set TRIES=0
-
-:wait_loop
-set /a TRIES+=1
-if %TRIES% gtr 10 (
-    echo   [WARN] Backend not ready after 35s, starting frontend anyway...
-    goto start_fe
+:start_frontend
+call :frontend_http_ready
+if not errorlevel 1 goto services_ready
+powershell -NoProfile -Command "$ErrorActionPreference='Stop'; Start-Process -FilePath (Get-Command node.exe).Source -ArgumentList @('node_modules/vite/bin/vite.js','--host','127.0.0.1','--port','3000','--strictPort') -WorkingDirectory $env:FRONTEND -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:BACKEND 'logs\frontend.stdout.log') -RedirectStandardError (Join-Path $env:BACKEND 'logs\frontend.stderr.log')"
+if errorlevel 1 goto fail
+set "TRIES=0"
+:wait_frontend
+call :frontend_http_ready
+if not errorlevel 1 goto services_ready
+set /a TRIES+=1 >nul
+if %TRIES% geq 20 (
+    echo   [FAIL] Frontend is not ready. Check backend\logs\frontend.stderr.log.
+    goto fail
 )
-powershell -Command "try{$null=Invoke-WebRequest 'http://localhost:8000/api/data_center/status' -TimeoutSec 2 -UseBasicParsing;exit 0}catch{exit 1}" >nul 2>&1
-if %errorlevel% neq 0 (
-    echo   [%TRIES%/10] waiting...
-    timeout /t 3 /nobreak >nul
-    goto wait_loop
-)
-echo   [OK] Backend is ready!
+powershell -NoProfile -Command "Start-Sleep -Seconds 1"
+goto wait_frontend
 
-:start_fe
-pushd "%FRONTEND%"
-start "Frontend" cmd /k "npx vite --port 3000"
-popd
-
+:services_ready
 echo.
-echo ==========================================
-echo   Backend:  http://localhost:8000
-echo   Frontend: http://localhost:3000
-echo ==========================================
-
-timeout /t 5 /nobreak >nul
-start http://localhost:3000
-
-echo.
-echo All services started. Press any key to close this window...
+echo   [OK] Backend and frontend are responding.
+echo   Open: http://127.0.0.1:3000
+start "" http://127.0.0.1:3000
+echo   Press any key to close this launcher...
 pause >nul
-goto :eof
+exit /b 0
 
 :fail
 echo.
-echo ==========================================
-echo   STARTUP FAILED - see errors above
-echo ==========================================
-echo.
+echo   STARTUP FAILED - see the actual error above.
+if /i "%~1"=="--prepare-only" exit /b 1
 pause
 exit /b 1
 
-:: ==========================================
-:: Helper subroutines with auto fallback
-:: ==========================================
+:select_python
+set "PYTHON_EXE="
+call :try_python "%VENV_PYTHON%"
+if defined PYTHON_EXE exit /b 0
+for /f "delims=" %%p in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do call :try_python "%%p"
+if defined PYTHON_EXE exit /b 0
+for /f "delims=" %%p in ('where python 2^>nul') do call :try_python "%%p"
+exit /b 0
+
+:try_python
+if defined PYTHON_EXE exit /b 0
+if not exist "%~1" exit /b 1
+"%~1" -X utf8 -c "import sys; sys.exit(0 if sys.version_info >= (3,12) else 1)" >nul 2>&1
+if errorlevel 1 exit /b 1
+set "PYTHON_EXE=%~1"
+exit /b 0
+
+:backend_ready
+"%VENV_PYTHON%" -X utf8 -c "import uvicorn, fastapi, pandas, numpy, sqlalchemy, jinja2, structlog, scipy, sklearn, akshare, tushare, baostock, dotenv"
+exit /b %errorlevel%
+
+:frontend_ready
+pushd "%FRONTEND%"
+node node_modules/vite/bin/vite.js --version >nul 2>&1
+if errorlevel 1 (
+    popd
+    exit /b 1
+)
+popd
+exit /b 0
 
 :install_backend_deps
-echo   [INFO] Installing backend dependencies...
-echo   - [1/3] Trying Aliyun mirror...
-"%VENV_PIP%" install -r "%BACKEND%\requirements.txt" -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
+echo   [INFO] Installing backend dependencies with UTF-8...
+"%VENV_PYTHON%" -X utf8 -m pip install -r "%BACKEND%\requirements.txt" -i https://mirrors.aliyun.com/pypi/simple/
 if not errorlevel 1 exit /b 0
-
-echo   - [2/3] Aliyun mirror failed, trying Tencent Cloud mirror...
-"%VENV_PIP%" install -r "%BACKEND%\requirements.txt" -i https://mirrors.cloud.tencent.com/pypi/simple/ --trusted-host mirrors.cloud.tencent.com
+echo   [INFO] First install attempt failed; retrying official PyPI...
+"%VENV_PYTHON%" -X utf8 -m pip install -r "%BACKEND%\requirements.txt" -i https://pypi.org/simple/
 if not errorlevel 1 exit /b 0
-
-echo   - [3/3] Domestic mirrors failed, trying official PyPI...
-"%VENV_PIP%" install -r "%BACKEND%\requirements.txt"
-if not errorlevel 1 exit /b 0
-
-echo   - [FAIL] All pip mirrors failed. Please check network/DNS settings.
+echo   [FAIL] Dependency installation failed. See pip output for the cause.
 exit /b 1
 
 :install_frontend_deps
 pushd "%FRONTEND%"
-echo   - [1/2] Installing frontend packages via npm...
-call npm install
+call npm ci --no-fund
 if not errorlevel 1 (
     popd
     exit /b 0
 )
-echo   - [2/2] Default npm registry failed, retrying with npmmirror...
-call npm install --registry=https://registry.npmmirror.com
+echo   [INFO] Retrying npm with npmmirror...
+call npm ci --no-fund --registry=https://registry.npmmirror.com
 if not errorlevel 1 (
     popd
     exit /b 0
 )
 popd
+echo   [FAIL] Frontend installation failed. See npm output for the cause.
 exit /b 1
+
+:backend_http_ready
+powershell -NoProfile -Command "try { $r=Invoke-RestMethod 'http://127.0.0.1:8000/openapi.json' -TimeoutSec 2; $v=(Get-Content -Raw -LiteralPath (Join-Path $env:ROOT 'VERSION')).Trim(); if ($r.info.version -eq $v) { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>&1
+exit /b %errorlevel%
+
+:frontend_http_ready
+powershell -NoProfile -Command "try { $r=Invoke-WebRequest 'http://127.0.0.1:3000/' -TimeoutSec 2 -UseBasicParsing; if ($r.StatusCode -eq 200) { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>&1
+exit /b %errorlevel%
