@@ -1,5 +1,7 @@
 <h1 align="center">QFO量化回测平台</h1>
 
+> **v1.0.3** 修复 Windows 首次安装的 Python 选择与 UTF-8 编码问题，并更新前端依赖。详见 [发布说明](RELEASE_NOTES.md)。
+
 <p align="center">
   <strong>免费开源、本地运行的 A 股量化研究与回测平台</strong>
 </p>
@@ -7,7 +9,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/Python-3.12%2B-blue.svg" alt="Python 3.12+">
-  <img src="https://img.shields.io/badge/Node.js-18%2B-green.svg" alt="Node.js 18+">
+  <img src="https://img.shields.io/badge/Node.js-22.12%2B-green.svg" alt="Node.js 22.12+">
   <img src="https://img.shields.io/badge/FastAPI-Backend-009688.svg" alt="FastAPI">
   <img src="https://img.shields.io/badge/React-Frontend-61DAFB.svg" alt="React">
   <img src="https://img.shields.io/badge/SQLite-Local%20DB-003B57.svg" alt="SQLite">
@@ -73,7 +75,7 @@ QFO 是一个面向 A 股量化分析的本地化量化回测平台，适合在�
 
 ### Windows 用户
 
-1. **下载当前稳定版 v1.0.2**：[下载稳定版安装包](https://github.com/yeh2017/QFO-Quant-Platform/releases/latest/download/QFO-Quant-Platform.zip)
+1. **下载当前稳定版 v1.0.3**：[下载稳定版安装包](https://github.com/yeh2017/QFO-Quant-Platform/releases/latest/download/QFO-Quant-Platform.zip)
 2. **解压**：将压缩包解压到一个**不包含中文、空格**的路径下，例如 `D:\QFO`。
 3. **运行**：双击文件夹内的 **`run_first_time.bat`** 启动；日常快速启动使用 **`run_quick_start.bat`**。
 
@@ -88,7 +90,7 @@ QFO 是一个面向 A 股量化分析的本地化量化回测平台，适合在�
 
 - Windows 10/11
 - [Python 3.12+](https://www.python.org/downloads/)
-- [Node.js 18+](https://nodejs.org/)
+- [Node.js 22.12+](https://nodejs.org/)
 - [Git](https://git-scm.com/downloads)
 
 ### 2. 下载项目
@@ -317,6 +319,14 @@ QFO 支持新闻摘要、精选新闻和高分事件推送。推送能力默认�
 推送配置属于本地私有配置，运行时会写入 `backend/.notify_config.json`，该文件已被 `.gitignore` 排除，不会上传到 Git。
 
 ## 常见问题
+
+### 从其他电脑复制项目后不能启动，或提示 GBK 解码错误
+
+Python 虚拟环境可能保留原电脑的路径，建议在目标电脑重新下载稳定版并运行 `run_first_time.bat`，由本机创建环境。保留数据请按[迁移说明](docs/upgrade-data-migration.md)复制数据库，避免直接复用其他电脑的 `backend/.venv` 和 `frontend/node_modules`。
+
+v1.0.3 会选择 Python 3.12+，并使用当前环境的 `python -X utf8 -m pip` 安装依赖。`UnicodeDecodeError: 'gbk'` 属于编码问题，单纯更换镜像不能解决。窗口会显示实际使用的 Python 路径；服务启动日志位于 `backend/logs/`。
+
+`npm` 的 funding 是赞助提示；vulnerabilities 是依赖审计结果。不要直接运行 `npm audit fix --force`，请使用最新稳定版或反馈完整审计输出。
 
 ### 运行后提示 Python not found
 

@@ -32,7 +32,8 @@ class FinancialWriter:
 
         if "end_date" in df.columns:
             df = df.drop_duplicates(subset=["end_date"], keep="first")
-            df = df.sort_values("end_date", ascending=False).head(4)
+            # 保留最近 8 期（2 年），覆盖多期财务因子回测（ROE趋势等）+ ann_date 不可逆保留
+            df = df.sort_values("end_date", ascending=False).head(8)
 
         # 直接 upsert，不清空历史——ON CONFLICT DO UPDATE SET 会覆盖已有期数
 
@@ -45,6 +46,7 @@ class FinancialWriter:
             record = {
                 "code": code,
                 "report_date": report_date,
+                "ann_date": self._parse_report_date(row.get("ann_date", "")),
                 "roe": self._safe_float(row.get("roe")),
                 "roa": self._safe_float(row.get("roa")),
                 "gross_profit_margin": self._safe_float(
@@ -73,16 +75,17 @@ class FinancialWriter:
 
             upsert_sql = text("""
                 INSERT INTO stock_financials (
-                    code, report_date, roe, roa, gross_profit_margin,
+                    code, report_date, ann_date, roe, roa, gross_profit_margin,
                     net_profit_margin, revenue_yoy, net_profit_yoy, eps,
-                    cashflow_oper, debt_to_assets
+                    cashflow_oper, debt_to_assets, updated_at
                 )
                 VALUES (
-                    :code, :report_date, :roe, :roa, :gross_profit_margin,
+                    :code, :report_date, :ann_date, :roe, :roa, :gross_profit_margin,
                     :net_profit_margin, :revenue_yoy, :net_profit_yoy, :eps,
-                    :cashflow_oper, :debt_to_assets
+                    :cashflow_oper, :debt_to_assets, CURRENT_TIMESTAMP
                 )
                 ON CONFLICT(code, report_date) DO UPDATE SET
+                    ann_date=COALESCE(excluded.ann_date, stock_financials.ann_date),
                     roe=excluded.roe, roa=excluded.roa,
                     gross_profit_margin=excluded.gross_profit_margin,
                     net_profit_margin=excluded.net_profit_margin,
@@ -90,7 +93,8 @@ class FinancialWriter:
                     net_profit_yoy=excluded.net_profit_yoy,
                     eps=excluded.eps,
                     cashflow_oper=COALESCE(excluded.cashflow_oper, stock_financials.cashflow_oper),
-                    debt_to_assets=COALESCE(excluded.debt_to_assets, stock_financials.debt_to_assets)
+                    debt_to_assets=COALESCE(excluded.debt_to_assets, stock_financials.debt_to_assets),
+                    updated_at=CURRENT_TIMESTAMP
             """)
             db.execute(upsert_sql, record)
             written += 1

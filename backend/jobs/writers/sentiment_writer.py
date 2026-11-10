@@ -20,16 +20,17 @@ class SentimentWriter:
     #  资金流向 (StockMoneyFlow)
     # ================================================================
 
-    def upsert_moneyflow_batch(self, db: Session, df: pd.DataFrame, trade_date: date_type, target_set: set):
+    def upsert_moneyflow_batch(self, db: Session, df: pd.DataFrame, trade_date: date_type, target_set: set) -> int:
         """
         将 Tushare moneyflow(trade_date=xxx) 全市场 DataFrame 批量写入。
+        Returns: 实际写入行数
         """
         if df is None or df.empty:
-            return
+            return 0
 
         filtered = df[df["ts_code"].isin(target_set)].copy()
         if filtered.empty:
-            return
+            return 0
 
         # 计算净主力流入 = (大单买入 + 特大单买入) - (大单卖出 + 特大单卖出)
         records = []
@@ -51,7 +52,7 @@ class SentimentWriter:
             })
 
         if not records:
-            return
+            return 0
 
         cols = list(records[0].keys())
         placeholders = ", ".join(f":{c}" for c in cols)
@@ -66,6 +67,7 @@ class SentimentWriter:
         """)
         db.execute(sql, records)
         log.info("upsert_moneyflow", trade_date=str(trade_date), count=len(records))
+        return len(records)
 
 
     # ================================================================
@@ -80,7 +82,7 @@ class SentimentWriter:
             records: [{"code": ..., "end_date": ..., "holder_num": ..., "holder_num_change_rate": ...}]
         """
         if not records:
-            return
+            return 0
 
         sql = text("""
             INSERT INTO stock_shareholder_count (code, end_date, holder_num, holder_num_change_rate)

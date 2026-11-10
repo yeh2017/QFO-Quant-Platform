@@ -54,11 +54,11 @@ class TaskStore:
     def _broadcast_update(self, task_id: str):
         """将任务状态推送到所有 WebSocket 连接（线程安全）"""
         try:
-            from routers.ws import manager
+            from core.ws_manager import broadcast_threadsafe
             task = self._tasks.get(task_id)
-            if not task or not manager.active:
+            if not task:
                 return
-            msg = {
+            broadcast_threadsafe({
                 "type": "task_update",
                 "payload": {
                     "task_id": task_id,
@@ -67,8 +67,7 @@ class TaskStore:
                     "result": task.get("result"),
                     "error": task.get("error"),
                 }
-            }
-            manager.broadcast_threadsafe(msg)
+            })
         except Exception:
             pass  # best-effort，绝不影响主流程
 

@@ -190,11 +190,16 @@ async def _daily_summary_loop():
 
 @asynccontextmanager
 async def lifespan(app):
-    """FastAPI lifespan：启动时运行 DB 迁移 + 注册定时任务"""
+    """FastAPI lifespan：启动时运行 DB 迁移 + 注册定时任务 + 注入 WS 广播"""
     from core.database import migrate_backtest_results, migrate_stock_news, migrate_financial_columns
     migrate_backtest_results()
     migrate_stock_news()
     migrate_financial_columns()
+
+    # 注入 WebSocket 广播回调，解耦底层对 routers.ws 的依赖
+    from core.ws_manager import set_broadcaster
+    from routers.ws import manager
+    set_broadcaster(manager.broadcast_threadsafe)
     _asyncio.create_task(_daily_cleanup_loop())
     _asyncio.create_task(_news_auto_fetch_loop())
     _asyncio.create_task(_daily_summary_loop())
@@ -261,7 +266,7 @@ _BaseJSONResponse.render = SafeJSONResponse.render  # type: ignore[assignment]
 app = FastAPI(
     title="QFO量化回测平台",
     description="多数据源集成 | 因子模块 | 策略回测 | 组合优化",
-    version="1.0.2",
+    version="1.0.3",
     lifespan=lifespan,
 )
 

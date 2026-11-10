@@ -132,3 +132,74 @@ def _upsert_index_weight(index_code: str, df: pd.DataFrame) -> int:
                 log.debug("index_weight_row_skip", error=str(e))
 
     return written
+
+
+def backfill_index_weight(
+    ts_source, start_date: str = "20180101", end_date: str = None,
+    task_id: Optional[str] = None,
+) -> dict:
+    """
+    回填指数成分历史权重（S6 修复）。
+
+    按月末日期逐月拉取 index_weight(trade_date=YYYYMMDD)，
+    覆盖 start_date 到 end_date 之间的所有月末。
+
+    Args:
+        ts_source: Tushare 数据源实例
+        start_date: 起始日期（YYYYMMDD），默认 20180101
+        end_date: 结束日期（YYYYMMDD），默认当前日期
+        task_id: 异步任务 ID（可选，用于进度上报）
+    """
+    import data_sources.tushare_source as tushare_module
+    from datetime import datetime, timedelta
+    from dateutil.relativedelta import relativedelta
+
+    if end_date is None:
+        from utils.trade_date import resolve_end_date
+        end_date = resolve_end_date().replace("-", "")
+
+    # 生成月末日期序列
+    start = datetime.strptime(start_date, "%Y%m%d")
+    end = datetime.strptime(end_date, "%Y%m%d")
+    month_ends = []
+    cursor = start.replace(day=1) + relativedelta(months=1) - timedelta(days=1)
+    while cursor <= end:
+        month_ends.append(cursor.strftime("%Y%m%d"))
+        cursor += relativedelta(months=1)
+
+    total_rows = 0
+    total_steps = len(month_ends) * len(INDEX_CODES)
+    step = 0
+
+    for td in month_ends:
+        for idx_code, idx_name in INDEX_CODES.items():
+            step += 1
+            if task_id:
+                report_progress(task_id, step, total_steps,
+                                f"回填 {idx_name} {td[:4]}-{td[4:6]}...")
+            try:
+                @tushare_module.with_tushare_retry(max_retries=2, delay=2.0)
+                def _fetch(_code=idx_code, _td=td):
+                    return ts_source.pro.index_weight(
+                        index_code=_code, trade_date=_td
+                    )
+
+                df = _fetch()
+                if df is None or df.empty:
+                    continue
+
+                rows = _upsert_index_weight(idx_code, df)
+                total_rows += rows
+                if rows > 0:
+                    log.debug("backfill_index_weight", index=idx_name,
+                              date=td, rows=rows)
+
+                time.sleep(0.5)  # API 限频（回填量大，适当降速）
+
+            except Exception as e:
+                log.warning("backfill_index_weight_failed",
+                            index=idx_name, date=td, error=str(e))
+
+    log.info("backfill_index_weight_done", total=total_rows,
+             months=len(month_ends))
+    return {"rows": total_rows, "months": len(month_ends)}

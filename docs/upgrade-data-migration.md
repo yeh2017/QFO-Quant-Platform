@@ -41,6 +41,7 @@ backend/quant_data.db-shm
 
 ## 注意事项
 
+- 跨电脑迁移时，在目标电脑重新安装 Python 3.12+、Node.js 22.12+ 并运行首次启动脚本，不要复用原电脑的 `backend/.venv` 或 `frontend/node_modules`。
 - 建议迁移到相同版本或更新的稳定版本，不要把新版本数据库复制回旧版本程序。
 - 数据库不包含 Tushare Token、API Key 等本地配置，迁移后可能需要重新填写。
 - 不要删除旧版本目录，确认新版本运行和数据检查正常后再自行归档。

@@ -8,8 +8,6 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Dict, Optional, List
-import threading
-import time as _time
 import structlog
 
 log = structlog.get_logger(__name__)
@@ -23,36 +21,13 @@ _stock = StockService()
 _factor = FactorService(_stock)
 
 
-# ── 因子计算 TTL 缓存（5分钟，线程安全）──
+# ── 因子计算 TTL 缓存（共享状态下沉至 utils 层）──
 
-_factor_cache: dict = {}
-_factor_cache_lock = threading.Lock()
-_FACTOR_TTL = 300
-
-
-def _cache_key(codes, start_date, end_date, selected_factors, factor_weights=None):
-    return hash((
-        tuple(sorted(codes)),
-        start_date, end_date,
-        tuple(sorted((selected_factors or {}).items())),
-        tuple(sorted((factor_weights or {}).items())),
-    ))
-
-
-def _cache_get(key):
-    with _factor_cache_lock:
-        entry = _factor_cache.get(key)
-        if entry and (_time.time() - entry['ts']) < _FACTOR_TTL:
-            return entry['data']
-        return None
-
-
-def _cache_set(key, data):
-    with _factor_cache_lock:
-        _factor_cache[key] = {'data': data, 'ts': _time.time()}
-        if len(_factor_cache) > 100:
-            oldest = min(_factor_cache, key=lambda k: _factor_cache[k]['ts'])
-            del _factor_cache[oldest]
+from utils.factor_cache import (
+    cache_key as _cache_key,
+    cache_get as _cache_get,
+    cache_set as _cache_set,
+)
 
 
 from utils.json_utils import sanitize as _sanitize
@@ -84,30 +59,37 @@ async def get_factor_meta():
 @router.post("/factors/calculate")
 async def calculate_factors(request: FactorRequest):
     from utils.trade_date import get_table_latest_date
+    from utils.asset_type import classify as _classify
     end_date = request.end_date or get_table_latest_date("bars")
     if not end_date:
         return {"factor_scores": [], "total": 0, "message": "无行情数据"}
     start_date = request.start_date or (datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=365)).strftime("%Y-%m-%d")
+
+    # 过滤非股票代码（ETF/港股/期货无 A 股基本面因子数据，混入会产生垃圾分数）
+    stock_codes = [c for c in request.codes if _classify(c) == "stock"]
+    skipped = len(request.codes) - len(stock_codes)
+    if not stock_codes:
+        return {"factor_scores": [], "total": 0, "message": "无有效股票代码（已过滤 ETF 等非股票标的）"}
 
     # 构建请求级权重副本（不修改共享单例，线程安全）
     local_weights = None
     if request.factor_weights:
         local_weights = FactorService.normalize_weights(request.factor_weights)
 
-    ck = _cache_key(request.codes, start_date, end_date, request.selected_factors, request.factor_weights)
+    ck = _cache_key(stock_codes, start_date, end_date, request.selected_factors, request.factor_weights)
     cached = _cache_get(ck)
     if cached:
         return cached
 
     results = _factor.calculate_factor_scores_fast(
-        request.codes, start_date, end_date, request.selected_factors,
+        stock_codes, start_date, end_date, request.selected_factors,
         factor_weights=local_weights,
     )
     errors = []
 
     # 降级慢路径：限制最多 50 只，避免 300+ codes 触发全量逐只计算
-    if len(results) < max(5, len(request.codes) // 3):
-        slow_codes = request.codes[:50]
+    if len(results) < max(5, len(stock_codes) // 3):
+        slow_codes = stock_codes[:50]
         if local_weights:
             _factor.set_factor_weights(local_weights)
         results, errors = _factor.calculate_factors(
@@ -127,7 +109,7 @@ async def calculate_factors(request: FactorRequest):
                 func.min(StockDailyBar.trade_date),
                 func.max(StockDailyBar.trade_date),
             ).filter(and_(
-                StockDailyBar.code.in_(request.codes[:10]),  # 抽样即可
+                StockDailyBar.code.in_(stock_codes[:10]),  # 抽样即可
                 StockDailyBar.trade_date >= start_date,
                 StockDailyBar.trade_date <= end_date,
             )).one()
@@ -144,6 +126,7 @@ async def calculate_factors(request: FactorRequest):
         "industry_exposure": industry_exposure,
         "total": len(results),
         "errors": errors,
+        "skipped_info": f"已跳过 {skipped} 只非股票标的（ETF/港股等无基本面因子）" if skipped else None,
         "requested_start_date": start_date,
         "actual_start_date": actual_start,
         "actual_end_date": actual_end,
@@ -195,11 +178,15 @@ async def calculate_factors(request: FactorRequest):
 @router.post("/factors/ic_analysis")
 async def factor_ic_analysis(request: FactorRequest):
     from utils.trade_date import get_table_latest_date
+    from utils.asset_type import classify as _classify
     end_date = request.end_date or get_table_latest_date("bars")
     if not end_date:
         return {"error": "无行情数据"}
     start_date = request.start_date or (datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=365)).strftime("%Y-%m-%d")
-    result = _factor.analyze_factor_ic(request.codes, start_date, end_date)
+    stock_codes = [c for c in request.codes if _classify(c) == "stock"]
+    if len(stock_codes) < 10:
+        return {"error": "有效股票不足 10 只（已过滤 ETF 等非股票标的）"}
+    result = _factor.analyze_factor_ic(stock_codes, start_date, end_date)
     result["requested_start_date"] = start_date
     result["actual_end_date"] = end_date
     return _sanitize(result)

@@ -28,7 +28,7 @@ def load_factor_df(codes: List[str], start_date: str, end_date: str) -> pd.DataF
     try:
         from core.database import db_session
         from models.quant_data import StockDailyFactor, StockDailyBar, StockFinancial
-        from sqlalchemy import and_, func
+        from sqlalchemy import and_, or_, func
 
         records = {}
         with db_session() as db:
@@ -65,12 +65,13 @@ def load_factor_df(codes: List[str], start_date: str, end_date: str) -> pd.DataF
                     "dv_ttm": r.dv_ttm,
                 })
 
-            # ── 2. 动量 + 波动（StockDailyBar 批量，取最近 20 日）──
+            # ── 2. 动量 + 波动（StockDailyBar 批量，取最近 20 日，前复权）──
             bar_subq = (
                 db.query(
                     StockDailyBar.code,
                     StockDailyBar.trade_date,
                     StockDailyBar.close,
+                    StockDailyBar.adj_factor,
                 )
                 .filter(
                     StockDailyBar.code.in_(codes),
@@ -80,14 +81,21 @@ def load_factor_df(codes: List[str], start_date: str, end_date: str) -> pd.DataF
                 .order_by(StockDailyBar.code, StockDailyBar.trade_date.desc())
                 .all()
             )
+            # 按 code 分组，使用前复权价格（close * adj_factor / latest_factor）
             bar_map = defaultdict(list)
+            adj_map = defaultdict(list)
             for row in bar_subq:
                 if row.close is not None:
                     bar_map[row.code].append(float(row.close))
+                    adj_map[row.code].append(float(row.adj_factor) if row.adj_factor else 1.0)
 
             for code, closes in bar_map.items():
                 if len(closes) >= 2:
-                    closes_arr = np.array(closes[:20])
+                    closes_raw = np.array(closes[:20])
+                    adjs = np.array(adj_map[code][:20])
+                    # 前复权：close * adj_factor / latest_adj_factor
+                    latest_adj = adjs[0] if adjs[0] != 0 else 1.0
+                    closes_arr = closes_raw * adjs / latest_adj
                     if len(closes_arr) >= 2:
                         rev = closes_arr[::-1]
                         returns_20 = np.diff(rev) / np.where(rev[:-1] != 0, rev[:-1], np.nan)
@@ -100,13 +108,26 @@ def load_factor_df(codes: List[str], start_date: str, end_date: str) -> pd.DataF
                         vol_std = float(np.std(returns_20)) if len(returns_20) > 1 else 0.0
                         records[code]["volatility_20"] = vol_std * np.sqrt(TRADING_DAYS)
 
-            # ── 3. 财务因子（StockFinancial 最新季报）──
+            # ── 3. 财务因子（StockFinancial PIT：仅使用已公告的最新季报）──
+            # PIT 逻辑：ann_date <= end_date（公告日不晚于查询日）
+            # 兼容老数据（ann_date 为空时回退到 report_date 过滤）
             fin_subq = (
                 db.query(
                     StockFinancial.code,
                     func.max(StockFinancial.report_date).label("max_date"),
                 )
-                .filter(StockFinancial.code.in_(codes))
+                .filter(
+                    StockFinancial.code.in_(codes),
+                    # PIT: 只取公告日在查询日期之前的报表
+                    or_(
+                        StockFinancial.ann_date <= end_date,
+                        # 兼容: ann_date 为空的老数据，退化为 report_date 过滤（保守，不会前视）
+                        and_(
+                            StockFinancial.ann_date.is_(None),
+                            StockFinancial.report_date <= end_date,
+                        ),
+                    ),
+                )
                 .group_by(StockFinancial.code)
                 .subquery()
             )

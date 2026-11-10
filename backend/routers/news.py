@@ -329,7 +329,8 @@ async def get_auto_config():
             row = db.execute(_text(
                 "SELECT "
                 "  COUNT(*) AS total, "
-                "  SUM(CASE WHEN related_codes IS NOT NULL AND related_codes != '[]' THEN 1 ELSE 0 END) AS has_codes, "
+                "  SUM(CASE WHEN related_codes IS NOT NULL AND related_codes != '[]' "
+                "    AND (nlp_reason IS NULL OR nlp_reason NOT LIKE '[规则]%') THEN 1 ELSE 0 END) AS has_codes, "
                 "  SUM(CASE WHEN event_type IS NOT NULL AND event_type != '' "
                 "    AND related_codes IS NOT NULL AND related_codes != '[]' "
                 "    AND (nlp_reason IS NULL OR nlp_reason NOT LIKE '[规则]%') THEN 1 ELSE 0 END) AS enriched, "
@@ -339,7 +340,7 @@ async def get_auto_config():
             stats = _daily.stats
             pipeline_stats = {
                 "news_total": row[0] or 0,
-                "llm_target": row[1] or 0,      # 有关联股票（可进LLM）
+                "llm_target": row[1] or 0,      # 有关联股票的新闻（排除规则赋分事件）
                 "llm_enriched": row[2] or 0,     # LLM已标注
                 "event_total": row[3] or 0,      # 事件总数
                 "llm_calls_today": stats.get("calls", 0),

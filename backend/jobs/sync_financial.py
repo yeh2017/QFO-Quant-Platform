@@ -43,7 +43,9 @@ def sync_financial(ts_source, fin_writer, codes: List[str],
     # 跳过 90 天内已更新的个股，只拉过期的。两层互不冲突：
     #   第1层 = 财报季外不进入 / 财报季内 7 天执行一次
     #   第2层 = 进入后只拉真正需要更新的个股
-    FINANCIAL_SKIP_DAYS = 90
+    # 第2层：逐只检查 DB 中的 updated_at，跳过近期已更新的个股。
+    # 14 天覆盖 2 个第1层同步周期（7天/次），确保财报季内能捕获新披露数据。
+    FINANCIAL_SKIP_DAYS = 14
     need_fetch = codes
     if not force_refill:
         try:

@@ -1,7 +1,7 @@
 import structlog
 log = structlog.get_logger(__name__)
 """回测服务（三层架构调度器）: 信号层 → 仓位层 → 模拟层"""
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from datetime import datetime, timedelta
 from collections import OrderedDict
 
@@ -152,7 +152,7 @@ class BacktestService:
         ret_arr = np.nan_to_num(ret_arr, nan=0.0, posinf=0.0, neginf=0.0)
         n = len(valid_codes)
         # ── 加载可交易状态矩阵（停牌/涨跌停过滤）──
-        can_buy, can_sell = self._load_tradeable_mask(
+        can_buy, can_sell, delist_mask = self._load_tradeable_mask(
             stock_codes, start_date, end_date, valid_codes, dates
         )
         topN = top_n_param if top_n_param else max(1, min(5, n))
@@ -242,9 +242,120 @@ class BacktestService:
         entry_prices: Dict[str, float] = {}
         holding = np.zeros(n, dtype=bool)
         holdings_snapshots: list = []
+        # pending: 上一轮产生的决策，延后到下一交易日执行
+        pending: Optional[dict] = None
         for i in range(T - 1):
-            need_update = False
-            weights = current_weights.copy()
+            # ── Phase 1: 执行上一轮的 pending 决策（T日信号 → T+1日执行） ──
+            if pending is not None:
+                weights = pending['weights'].copy()
+                # 不可卖出检查：区分停牌（保留权重等复牌）和退市（强制清仓）
+                for idx in range(n):
+                    if weights[idx] == 0 and current_weights[idx] > 0 and not can_sell[i][idx]:
+                        if delist_mask[i, idx]:
+                            pass  # 退市：强制清仓，不恢复权重
+                        else:
+                            weights[idx] = current_weights[idx]  # 停牌/跌停：保留
+                # 恢复后重新归一化
+                if weights.sum() > 0:
+                    weights = weights / weights.sum()
+                # 交易成本（在执行日扣除）
+                portfolio_rets[i] -= pos_mgr.calc_cost(current_weights, weights)
+                # ── 交易标记（使用执行日日期和价格） ──
+                prev_top = set(np.where(current_weights > 0)[0])
+                new_top = set(np.where(weights > 0)[0])
+                p_reason_buy = pending['reason_buy']
+                p_reason_sell = pending['reason_sell']
+                p_reason_ctx = pending.get('reason_ctx', {})
+                p_is_signal = pending.get('is_signal', False)
+                # 完全清仓（退出组合）
+                for idx in prev_top - new_top:
+                    code = valid_codes[idx]
+                    raw_price = price_arr[i, idx]
+                    sell_price = float(raw_price) if not np.isnan(raw_price) else 0.0
+                    buy_price = entry_prices.pop(code, sell_price)
+                    pnl = round((sell_price / buy_price - 1) * 100, 1) if buy_price > 0 else 0.0
+                    reason = "退市清仓" if delist_mask[i, idx] else p_reason_sell
+                    trade_markers[code].append({
+                        "time": dates[i], "type": "sell",
+                        "price": sell_price, "weight": 0.0,
+                        "reason": reason, "pnl": pnl,
+                        "ctx": p_reason_ctx.get(idx, "") if p_is_signal else "",
+                    })
+                # 新建仓（进入组合）
+                for idx in new_top - prev_top:
+                    code = valid_codes[idx]
+                    raw_price = price_arr[i, idx]
+                    buy_price = float(raw_price) if not np.isnan(raw_price) else 0.0
+                    entry_prices[code] = buy_price
+                    trade_markers[code].append({
+                        "time": dates[i], "type": "buy",
+                        "price": buy_price,
+                        "weight": round(float(weights[idx]) * 100, 1),
+                        "reason": p_reason_buy, "pnl": None,
+                        "ctx": p_reason_ctx.get(idx, "") if p_is_signal else "",
+                    })
+                # 权重变化（加仓/减仓，标的未退出组合）
+                for idx in prev_top & new_top:
+                    old_w = current_weights[idx]
+                    new_w = weights[idx]
+                    delta = abs(new_w - old_w)
+                    if delta < 0.005:
+                        continue  # 权重变化 < 0.5% 忽略
+                    code = valid_codes[idx]
+                    raw_price = price_arr[i, idx]
+                    price = float(raw_price) if not np.isnan(raw_price) else 0.0
+                    if new_w > old_w:
+                        trade_markers[code].append({
+                            "time": dates[i], "type": "buy",
+                            "price": price,
+                            "weight": round(float(new_w) * 100, 1),
+                            "reason": "加仓", "pnl": None,
+                            "ctx": p_reason_ctx.get(idx, "") if p_is_signal else "",
+                        })
+                    else:
+                        bp = entry_prices.get(code, price)
+                        pnl = round((price / bp - 1) * 100, 1) if bp > 0 else 0.0
+                        trade_markers[code].append({
+                            "time": dates[i], "type": "sell",
+                            "price": price,
+                            "weight": round(float(new_w) * 100, 1),
+                            "reason": "减仓", "pnl": pnl,
+                            "ctx": p_reason_ctx.get(idx, "") if p_is_signal else "",
+                        })
+                current_weights = weights
+                # 记录持仓快照（执行日）
+                top_holdings = [
+                    {"code": valid_codes[j], "weight": round(float(weights[j]) * 100, 1)}
+                    for j in range(n) if weights[j] > 0.001
+                ]
+                if top_holdings:
+                    holdings_snapshots.append({"date": dates[i], "holdings": top_holdings})
+                pending = None
+
+            # ── Phase 2: 当日组合收益（使用已生效的 current_weights） ──
+            portfolio_rets[i] += float(np.dot(current_weights, ret_arr[i]))
+
+            # ── Phase 2.5: 主动退市清仓（不等 pending，立即清零权重） ──
+            has_delist_liquidation = False
+            for idx in range(n):
+                if current_weights[idx] > 0 and delist_mask[i, idx]:
+                    code = valid_codes[idx]
+                    raw_price = price_arr[i, idx]
+                    sell_price = float(raw_price) if not np.isnan(raw_price) else 0.0
+                    buy_price = entry_prices.pop(code, sell_price)
+                    pnl = round((sell_price / buy_price - 1) * 100, 1) if buy_price > 0 else 0.0
+                    trade_markers[code].append({
+                        "time": dates[i], "type": "sell",
+                        "price": sell_price, "weight": 0.0,
+                        "reason": "退市清仓", "pnl": pnl, "ctx": "",
+                    })
+                    current_weights[idx] = 0.0
+                    holding[idx] = False
+                    has_delist_liquidation = True
+            if has_delist_liquidation and current_weights.sum() > 0:
+                current_weights = current_weights / current_weights.sum()
+
+            # ── Phase 3: 信号/因子层 → 产生 pending 决策（下一交易日执行） ──
             if is_signal and signal_matrix is not None:
                 # 停牌/涨跌停过滤：不可买的清除买入信号，不可卖的清除卖出信号
                 filtered_signals = signal_matrix[i].copy()
@@ -265,8 +376,18 @@ class BacktestService:
                     allow_reentry=getattr(strategy, 'allow_reentry', False),
                 )
                 if changed and w is not None:
-                    weights = w
-                    need_update = True
+                    reason_ctx = {}
+                    if signal_matrix is not None:
+                        reason_ctx = self._build_signal_context(
+                            strategy_type, strategy_params, price_arr, i, signal_matrix
+                        )
+                    pending = {
+                        'weights': w,
+                        'reason_buy': "信号买入",
+                        'reason_sell': "信号卖出",
+                        'reason_ctx': reason_ctx,
+                        'is_signal': True,
+                    }
             elif i in rebal_set:
                 if strategy.needs_factor:
                     factor_scores = _get_factor_scores_at(dates[i])
@@ -276,13 +397,13 @@ class BacktestService:
                     )
                 else:
                     factor_scores = {}
-                weights = pos_mgr.factor_to_weights(
+                new_w = pos_mgr.factor_to_weights(
                     valid_codes, factor_scores, topN, strategy_type,
                     as_of_date=dates[i],
                     max_single_weight=max_single_weight,
                 )
                 # 因子策略：不可买入的标的权重清零
-                weights[~can_buy[i]] = 0
+                new_w[~can_buy[i]] = 0
                 # 动态标的池：不在当期池内的标的权重清零
                 if per_date_codes is not None:
                     active_set = set(per_date_codes.get(dates[i], []))
@@ -294,94 +415,16 @@ class BacktestService:
                                 break
                     for idx in range(n):
                         if valid_codes[idx] not in active_set:
-                            weights[idx] = 0
-                if weights.sum() > 0:
-                    weights = weights / weights.sum()  # 重新归一化
-                need_update = True
-            if need_update:
-                day_ret = ret_arr[i] if i < len(ret_arr) else np.zeros(n)
-                weights = pos_mgr.apply_limits(weights, current_weights, day_ret)
-                # 跌停卖不掉：恢复原有权重
-                for idx in range(n):
-                    if weights[idx] == 0 and current_weights[idx] > 0 and not can_sell[i][idx]:
-                        weights[idx] = current_weights[idx]
-                # 恢复后重新归一化（防止总权重 > 1）
-                if weights.sum() > 0:
-                    weights = weights / weights.sum()
-                portfolio_rets[i] -= pos_mgr.calc_cost(current_weights, weights)
-                prev_top = set(np.where(current_weights > 0)[0])
-                new_top = set(np.where(weights > 0)[0])
-                reason_buy = "信号买入" if is_signal else f"因子 Top{topN}"
-                reason_sell = "信号卖出" if is_signal else f"调出 Top{topN}"
-                # 信号策略：生成具体决策依据
-                reason_ctx = {}
-                if is_signal and signal_matrix is not None:
-                    reason_ctx = self._build_signal_context(
-                        strategy_type, strategy_params, price_arr, i, signal_matrix
-                    )
-                # 完全清仓（退出组合）
-                for idx in prev_top - new_top:
-                    code = valid_codes[idx]
-                    raw_price = price_arr[i, idx]
-                    sell_price = float(raw_price) if not np.isnan(raw_price) else 0.0
-                    buy_price = entry_prices.pop(code, sell_price)
-                    pnl = round((sell_price / buy_price - 1) * 100, 1) if buy_price > 0 else 0.0
-                    trade_markers[code].append({
-                        "time": dates[i], "type": "sell",
-                        "price": sell_price, "weight": 0.0,
-                        "reason": reason_sell, "pnl": pnl,
-                        "ctx": reason_ctx.get(idx, "") if is_signal else "",
-                    })
-                # 新建仓（进入组合）
-                for idx in new_top - prev_top:
-                    code = valid_codes[idx]
-                    raw_price = price_arr[i, idx]
-                    buy_price = float(raw_price) if not np.isnan(raw_price) else 0.0
-                    entry_prices[code] = buy_price
-                    trade_markers[code].append({
-                        "time": dates[i], "type": "buy",
-                        "price": buy_price,
-                        "weight": round(float(weights[idx]) * 100, 1),
-                        "reason": reason_buy, "pnl": None,
-                        "ctx": reason_ctx.get(idx, "") if is_signal else "",
-                    })
-                # 权重变化（加仓/减仓，标的未退出组合）
-                for idx in prev_top & new_top:
-                    old_w = current_weights[idx]
-                    new_w = weights[idx]
-                    delta = abs(new_w - old_w)
-                    if delta < 0.005:
-                        continue  # 权重变化 < 0.5% 忽略
-                    code = valid_codes[idx]
-                    raw_price = price_arr[i, idx]
-                    price = float(raw_price) if not np.isnan(raw_price) else 0.0
-                    if new_w > old_w:
-                        trade_markers[code].append({
-                            "time": dates[i], "type": "buy",
-                            "price": price,
-                            "weight": round(float(new_w) * 100, 1),
-                            "reason": "加仓", "pnl": None,
-                            "ctx": reason_ctx.get(idx, "") if is_signal else "",
-                        })
-                    else:
-                        bp = entry_prices.get(code, price)
-                        pnl = round((price / bp - 1) * 100, 1) if bp > 0 else 0.0
-                        trade_markers[code].append({
-                            "time": dates[i], "type": "sell",
-                            "price": price,
-                            "weight": round(float(new_w) * 100, 1),
-                            "reason": "减仓", "pnl": pnl,
-                            "ctx": reason_ctx.get(idx, "") if is_signal else "",
-                        })
-                current_weights = weights
-                # 记录持仓快照（仅在权重变更时记录）
-                top_holdings = [
-                    {"code": valid_codes[j], "weight": round(float(weights[j]) * 100, 1)}
-                    for j in range(n) if weights[j] > 0.001
-                ]
-                if top_holdings:
-                    holdings_snapshots.append({"date": dates[i], "holdings": top_holdings})
-            portfolio_rets[i] += float(np.dot(current_weights, ret_arr[i]))
+                            new_w[idx] = 0
+                if new_w.sum() > 0:
+                    new_w = new_w / new_w.sum()  # 重新归一化
+                pending = {
+                    'weights': new_w,
+                    'reason_buy': f"因子 Top{topN}",
+                    'reason_sell': f"调出 Top{topN}",
+                    'reason_ctx': {},
+                    'is_signal': False,
+                }
         # 注入股票名称到持仓快照
         if holdings_snapshots:
             name_map = self._get_stock_names(valid_codes)
@@ -391,8 +434,10 @@ class BacktestService:
         # ── Step 4: 模拟层 ── 绩效计算
         engine = BacktestEngine()
         bench_daily = self._get_benchmark_returns(start_date, end_date, T - 1)
+        # rebal_indices +1 对齐执行日（信号在 i 产生，执行在 i+1）
+        exec_indices = [min(r + 1, T - 2) for r in rebal_indices]
         result = engine.calc_performance(
-            portfolio_rets, initial_cash, rebal_indices, T,
+            portfolio_rets, initial_cash, exec_indices, T,
             bench_daily, trade_markers, dates,
         )
         result.dates = dates[1:]  # 与 cumReturns 对齐（去掉初始日）
@@ -507,7 +552,46 @@ class BacktestService:
             adjusted_rows.append(grp[["code", "trade_date", "close"]])
         df = pd.concat(adjusted_rows, ignore_index=True)
         price_df = df.pivot(index="trade_date", columns="code", values="close")
-        price_df = price_df.ffill(limit=5).dropna(axis=1, thresh=int(len(price_df) * 0.7))
+        price_df = price_df.ffill(limit=5)
+        # 清除退市股最后交易日之后的 ffill 残留值（与 delist_mask 的 cutoff 对齐）
+        from models.quant_data import StockBasicInfo, StockDailyBar as _SDB
+        from sqlalchemy import func as _sa_func
+        with db_session() as db2:
+            delist_codes_set = set(
+                r[0] for r in
+                db2.query(StockBasicInfo.code)
+                .filter(
+                    StockBasicInfo.code.in_(list(price_df.columns)),
+                    StockBasicInfo.delist_date.isnot(None),
+                ).all()
+            )
+            if delist_codes_set:
+                all_delist = sorted(delist_codes_set)
+                last_bar_map = {}
+                for bi in range(0, len(all_delist), BATCH_SIZE):
+                    batch = all_delist[bi:bi + BATCH_SIZE]
+                    rows = (
+                        db2.query(
+                            _SDB.code,
+                            _sa_func.max(_SDB.trade_date),
+                        )
+                        .filter(
+                            _SDB.code.in_(batch),
+                            _SDB.trade_date >= price_df.index.min(),
+                            _SDB.trade_date <= price_df.index.max(),
+                        )
+                        .group_by(_SDB.code)
+                        .all()
+                    )
+                    for code, lb in rows:
+                        last_bar_map[code] = str(lb)
+                for code in delist_codes_set:
+                    if code not in price_df.columns:
+                        continue
+                    lb = last_bar_map.get(code)
+                    if lb:
+                        price_df.loc[price_df.index > lb, code] = np.nan
+        price_df = price_df.dropna(axis=1, thresh=int(len(price_df) * 0.7))
         self._price_cache[cache_key] = price_df
         return price_df
 
@@ -622,22 +706,23 @@ class BacktestService:
     def _load_tradeable_mask(
         self, codes: List[str], start_date: str, end_date: str,
         valid_codes: List[str], dates: List[str],
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """生成可交易状态矩阵，用于过滤不可执行的交易信号。
 
         停牌: volume == 0 或该日无数据 → 不可买也不可卖
         涨停: pct_chg >= 阈值 → 不可买入（已封板买不到）
         跌停: pct_chg <= -阈值 → 不可卖出（已封板卖不掉）
+        退市: delist_date 当日及之后 → 不可买卖 + 强制清仓标记
 
         阈值: 创业板(30)/科创板(68) = 20%, 其余 = 10%
               可转债不设涨跌停限制（规则不同且较宽松）
               ETF 不设涨跌停限制
 
         Returns:
-            (can_buy, can_sell): 两个 (T, N) 布尔矩阵
+            (can_buy, can_sell, delist_mask): 三个 (T, N) 布尔矩阵
         """
         from core.database import db_session
-        from models.quant_data import StockDailyBar
+        from models.quant_data import StockDailyBar, StockBasicInfo
         from utils.bar_query import classify_codes
 
         T, N = len(dates), len(valid_codes)
@@ -716,14 +801,59 @@ class BacktestService:
                     can_buy[tidx, idx] = pct < limit_up_thresholds[idx]
                     can_sell[tidx, idx] = pct > limit_down_thresholds[idx]
 
+        # ── 构建退市标记矩阵（用 last_bar 而非 delist_date，消除退市整理期后的资金僵死窗口） ──
+        delist_mask = np.zeros((T, N), dtype=bool)
+        if stock_codes_db:
+            from sqlalchemy import func as sa_func
+            delist_codes = dict(
+                db.query(StockBasicInfo.code, StockBasicInfo.delist_date)
+                .filter(StockBasicInfo.delist_date.isnot(None))
+                .all()
+            )
+            # 查每只退市股在回测期间的最后交易日
+            delist_in_pool = [c for c in code_to_idx if c in delist_codes]
+            last_bar_map = {}
+            for bi in range(0, len(delist_in_pool), BATCH_SIZE):
+                batch_d = delist_in_pool[bi:bi + BATCH_SIZE]
+                rows_d = (
+                    db.query(
+                        StockDailyBar.code,
+                        sa_func.max(StockDailyBar.trade_date).label("last_bar"),
+                    )
+                    .filter(
+                        StockDailyBar.code.in_(batch_d),
+                        StockDailyBar.trade_date >= start_date,
+                        StockDailyBar.trade_date <= end_date,
+                    )
+                    .group_by(StockDailyBar.code)
+                    .all()
+                )
+                for code, lb in rows_d:
+                    last_bar_map[code] = str(lb)
+            for code, idx in code_to_idx.items():
+                dd = delist_codes.get(code)
+                if not dd:
+                    continue
+                # 取 last_bar 和 delist_date 中较早的作为 cutoff
+                lb = last_bar_map.get(code)
+                cutoff = lb if (lb and lb < dd) else dd
+                for t, d in enumerate(dates):
+                    if d > cutoff:  # cutoff 当天仍可交易（最后逃生窗口）
+                        delist_mask[t, idx] = True
+
+        # 分类统计不可交易格子（改进日志可读性）
+        both_blocked = ~can_buy & ~can_sell
+        n_delisted = int((delist_mask & both_blocked).sum())
+        n_suspended = int(both_blocked.sum()) - n_delisted
         log.info(
             "tradeable_mask_loaded",
             total_cells=T * N,
-            suspended=int((~can_buy & ~can_sell).sum()),
+            suspended=n_suspended,
+            delisted=n_delisted,
             limit_up_blocked=int((~can_buy & can_sell).sum()),
             limit_down_blocked=int((can_buy & ~can_sell).sum()),
         )
-        return can_buy, can_sell
+        return can_buy, can_sell, delist_mask
 
 
     def _load_volume_matrix(

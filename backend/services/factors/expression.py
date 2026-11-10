@@ -96,12 +96,16 @@ def build_expression(preset_name: str, params: dict | None = None) -> str:
 # ── 时间序列算子（沿时间轴，每只股票独立） ──
 
 def _delay(x: pd.DataFrame, d: int) -> pd.DataFrame:
-    """d 日前的值"""
+    """d 日前的值（d 必须 >= 1，禁止负值前视）"""
+    if d < 1:
+        raise ValueError(f"delay 的天数必须 >= 1，收到 d={d}（负值会泄露未来数据）")
     return x.shift(d)
 
 
 def _delta(x: pd.DataFrame, d: int) -> pd.DataFrame:
-    """x - delay(x, d)"""
+    """x - delay(x, d)（d 必须 >= 1）"""
+    if d < 1:
+        raise ValueError(f"delta 的天数必须 >= 1，收到 d={d}（负值会泄露未来数据）")
     return x - x.shift(d)
 
 
@@ -323,6 +327,22 @@ def _validate_ast(node: ast.AST):
             raise ExpressionError("不支持方法调用（如 x.method()），只允许函数调用")
         if node.func.id not in ALLOWED_FUNCTIONS:
             raise ExpressionError(f"不支持的函数: {node.func.id}")
+        # delay/delta 天数参数必须 >= 1（防止负值前视泄露未来数据）
+        if node.func.id in ("delay", "delta") and len(node.args) >= 2:
+            d_arg = node.args[1]
+            if isinstance(d_arg, ast.Constant) and isinstance(d_arg.value, (int, float)):
+                if d_arg.value < 1:
+                    raise ExpressionError(
+                        f"{node.func.id} 的天数参数必须 >= 1，"
+                        f"收到 {d_arg.value}（负值或零会泄露未来数据）"
+                    )
+            elif isinstance(d_arg, ast.UnaryOp) and isinstance(d_arg.op, ast.USub):
+                # 处理 -5 这种负数字面量
+                if isinstance(d_arg.operand, ast.Constant):
+                    raise ExpressionError(
+                        f"{node.func.id} 的天数参数必须 >= 1，"
+                        f"收到 -{d_arg.operand.value}（负值会泄露未来数据）"
+                    )
         for arg in node.args:
             _validate_ast(arg)
 

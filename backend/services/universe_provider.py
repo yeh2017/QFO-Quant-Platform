@@ -131,7 +131,7 @@ class FactorFilterUniverse(UniverseProvider):
 
 
 class FullMarketUniverse(UniverseProvider):
-    """全市场：当前所有在市股票"""
+    """全市场：指定日期时点上所有在市股票（含后来退市的，消除存活偏差）"""
 
     def __init__(self):
         self._cache: Dict[str, List[str]] = {}
@@ -142,15 +142,20 @@ class FullMarketUniverse(UniverseProvider):
 
         from core.database import db_session
         from models.quant_data import StockBasicInfo
+        from sqlalchemy import or_
 
-        # list_date 存为 "YYYY-MM-DD"，date 入参也是 ISO 格式，直接字符串比较
+        # 时点判断：在 date 当天已上市且尚未退市的所有股票
+        # 用 delist_date 替代 is_active，让后来退市的股票在退市前被纳入标的池
         with db_session() as db:
             codes = [
                 r[0] for r in
                 db.query(StockBasicInfo.code)
                 .filter(
                     StockBasicInfo.list_date <= date,
-                    StockBasicInfo.is_active == True,
+                    or_(
+                        StockBasicInfo.delist_date.is_(None),   # 在市
+                        StockBasicInfo.delist_date > date,       # 尚未退市
+                    ),
                     # 排除北交所（4/8/9开头）：流动性差 + 涨跌停30%与回测引擎不匹配
                     ~StockBasicInfo.code.like("4%"),
                     ~StockBasicInfo.code.like("8%"),

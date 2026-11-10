@@ -130,13 +130,19 @@ class StockPoolResolver:
         return ["600519.SH", "000001.SZ"]  # 最终兜底
 
     def _resolve_all(self) -> List[str]:
-        """从本地 StockBasicInfo 表获取全市场"""
+        """从本地 StockBasicInfo 表获取全市场活跃股票（同步用途）
+
+        注意：回测存活偏差修复由 universe_provider.FullMarketUniverse 负责，
+        此处仅用于数据同步，只需拉取活跃股票即可。
+        """
         try:
             from core.database import db_session
             from models.quant_data import StockBasicInfo
 
             with db_session() as db:
-                rows = db.query(StockBasicInfo.code).filter(StockBasicInfo.is_active == True).all()
+                rows = db.query(StockBasicInfo.code).filter(
+                    StockBasicInfo.is_active == True
+                ).all()
                 if rows:
                     codes = [r.code for r in rows]
                     log.info("resolve_all", count=len(codes))
