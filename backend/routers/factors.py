@@ -8,8 +8,6 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Dict, Optional, List
-import threading
-import time as _time
 import structlog
 
 log = structlog.get_logger(__name__)
@@ -23,36 +21,13 @@ _stock = StockService()
 _factor = FactorService(_stock)
 
 
-# ── 因子计算 TTL 缓存（5分钟，线程安全）──
+# ── 因子计算 TTL 缓存（共享状态下沉至 utils 层）──
 
-_factor_cache: dict = {}
-_factor_cache_lock = threading.Lock()
-_FACTOR_TTL = 300
-
-
-def _cache_key(codes, start_date, end_date, selected_factors, factor_weights=None):
-    return hash((
-        tuple(sorted(codes)),
-        start_date, end_date,
-        tuple(sorted((selected_factors or {}).items())),
-        tuple(sorted((factor_weights or {}).items())),
-    ))
-
-
-def _cache_get(key):
-    with _factor_cache_lock:
-        entry = _factor_cache.get(key)
-        if entry and (_time.time() - entry['ts']) < _FACTOR_TTL:
-            return entry['data']
-        return None
-
-
-def _cache_set(key, data):
-    with _factor_cache_lock:
-        _factor_cache[key] = {'data': data, 'ts': _time.time()}
-        if len(_factor_cache) > 100:
-            oldest = min(_factor_cache, key=lambda k: _factor_cache[k]['ts'])
-            del _factor_cache[oldest]
+from utils.factor_cache import (
+    cache_key as _cache_key,
+    cache_get as _cache_get,
+    cache_set as _cache_set,
+)
 
 
 from utils.json_utils import sanitize as _sanitize

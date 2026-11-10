@@ -137,21 +137,13 @@ def cleanup_cache(retain_days: int = CACHE_RETAIN_DAYS) -> int:
     from utils.cache_manager import cache_manager
     cache_manager.cleanup_expired(max_age_days=retain_days)
 
-    # 清理 routers/factors.py 的 TTL 内存缓存（过期条目）
+    # 清理因子计算的 TTL 内存缓存（过期条目）
     try:
-        from routers.factors import _factor_cache, _factor_cache_lock, _FACTOR_TTL
-        import time as _time
-        now = _time.time()
-        with _factor_cache_lock:
-            expired_keys = [
-                k for k, entry in list(_factor_cache.items())
-                if now - entry.get('ts', 0) > _FACTOR_TTL
-            ]
-            for k in expired_keys:
-                del _factor_cache[k]
-        if expired_keys:
-            log.info("memory_cache_cleanup", expired=len(expired_keys))
-        return len(expired_keys)
+        from utils.factor_cache import cleanup_expired
+        expired = cleanup_expired()
+        if expired:
+            log.info("memory_cache_cleanup", expired=expired)
+        return expired
     except Exception:
         return 0
 

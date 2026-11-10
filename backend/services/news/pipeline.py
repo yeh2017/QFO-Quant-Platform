@@ -275,8 +275,8 @@ class NewsPipeline:
 
     def _broadcast(self, count: int):
         try:
-            from routers.ws import manager
-            manager.broadcast_threadsafe({
+            from core.ws_manager import broadcast_threadsafe
+            broadcast_threadsafe({
                 "type": "news_update",
                 "count": count,
             })
@@ -415,9 +415,9 @@ def enrich_news_llm(llm_items: List[dict]) -> int:
 def _broadcast_llm_stats():
     """LLM 完成后推送最新 pipeline 统计"""
     try:
-        from routers.ws import manager
+        from core.ws_manager import broadcast_threadsafe
         from services.news.sentiment_llm import _daily
-        manager.broadcast_threadsafe({
+        broadcast_threadsafe({
             "type": "llm_stats_update",
             "stats": _daily.stats,
         })
