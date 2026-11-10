@@ -29,7 +29,10 @@
 ### 🧹 其他
 - 新增指数成分权重回填函数 `backfill_index_weight()`（按月末逐月拉取 HS300/ZZ500/ZZ1000 历史成分）。
 - 新增回测正确性测试 `test_backtest_correctness.py`（8 用例，合成数据 + 手算验证，不依赖 DB）。
-- 自动化测试 86 项后端 + 69 项前端 + 36 项架构审计全部通过。
+- **数据同步退市股排除**：`stock_pool_resolver` 恢复 `is_active=True` 过滤（同步专用路径），消除 243 只退市股被误报为"未交易(停牌)"的虚假计数。
+- **资金流向计数精确化**：`upsert_moneyflow_batch` 返回实际写入行数，消除 `0 or len(df)` 边界导致的报告数字膨胀。
+- **P0 架构修复**：WebSocket 广播回调注入（`core/ws_manager.py`）+ 因子缓存下沉（`utils/factor_cache.py`），消除 3 处底层反向导入 routers 层的跨层违规。
+- 自动化测试 86 项后端 + 69 项前端 + 34 项架构审计全部通过。
 
 ---
 
