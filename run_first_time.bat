@@ -178,10 +178,15 @@ exit /b 0
 echo   [INFO] Installing backend dependencies with UTF-8...
 "%VENV_PYTHON%" -X utf8 -m pip install -r "%BACKEND%\requirements.txt" -i https://mirrors.aliyun.com/pypi/simple/
 if not errorlevel 1 exit /b 0
-echo   [INFO] First install attempt failed; retrying official PyPI...
+echo   [INFO] Aliyun mirror failed; trying Tencent Cloud mirror...
+"%VENV_PYTHON%" -X utf8 -m pip install -r "%BACKEND%\requirements.txt" -i https://mirrors.cloud.tencent.com/pypi/simple/
+if not errorlevel 1 exit /b 0
+echo   [INFO] Both mirrors failed; trying official PyPI...
 "%VENV_PYTHON%" -X utf8 -m pip install -r "%BACKEND%\requirements.txt" -i https://pypi.org/simple/
 if not errorlevel 1 exit /b 0
-echo   [FAIL] Dependency installation failed. See pip output for the cause.
+echo   [FAIL] Dependency installation failed on all three sources. See pip output above.
+echo   If you see "Failed to resolve" or "getaddrinfo failed", check your network and DNS.
+echo   Try another network and run this launcher again.
 exit /b 1
 
 :install_frontend_deps
