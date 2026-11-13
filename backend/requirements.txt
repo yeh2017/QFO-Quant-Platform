@@ -5,7 +5,7 @@ uvicorn[standard]>=0.23.0
 pydantic>=2.5.0
 
 # 数据源
-akshare>=1.12.95
+akshare==1.18.91
 tushare>=1.4.1
 baostock>=0.8.8
 

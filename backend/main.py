@@ -266,7 +266,7 @@ _BaseJSONResponse.render = SafeJSONResponse.render  # type: ignore[assignment]
 app = FastAPI(
     title="QFO量化回测平台",
     description="多数据源集成 | 因子模块 | 策略回测 | 组合优化",
-    version="1.0.4",
+    version="1.0.5",
     lifespan=lifespan,
 )
 

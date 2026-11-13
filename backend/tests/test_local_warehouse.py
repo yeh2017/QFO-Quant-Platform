@@ -21,6 +21,8 @@ def test_models_and_tables():
     print("=" * 50)
     
     from core.database import engine, Base
+    # 与 main.py 的首次启动一致：先注册模型，再在空库建表。
+    from models import all_models, quant_data  # noqa: F401
     
     # 建表
     Base.metadata.create_all(bind=engine)
@@ -37,6 +39,7 @@ def test_models_and_tables():
             print(f"  [OK] 表 {t} 存在")
         else:
             print(f"  [FAIL] 表 {t} 不存在!")
+        assert t in tables, f"missing table: {t}"
     
     print(f"  所有数据库表: {tables}")
     print()

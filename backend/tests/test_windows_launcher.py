@@ -58,3 +58,27 @@ def test_backend_dependency_source_fallback(tmp_path, available_source, attempte
     assert result.returncode == (0 if available_source else 1)
     if not available_source:
         assert "DNS" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires Windows cmd.exe")
+@pytest.mark.parametrize("installed_version,ready", [("1.18.91", True), ("1.20.37", False)])
+def test_backend_readiness_requires_pinned_akshare(tmp_path, installed_version, ready):
+    # 模拟安装元数据，执行真实就绪检查；旧环境不能跳过 requirements 中的版本调整。
+    root = Path(__file__).resolve().parents[2]
+    launcher = (root / "run_first_time.bat").read_text(encoding="utf-8")
+    subroutine = re.search(r"^:backend_ready\n.*?(?=^:\w+|\Z)", launcher, re.M | re.S)
+    assert subroutine is not None
+    metadata = tmp_path / f"akshare-{installed_version}.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(
+        f"Metadata-Version: 2.1\nName: akshare\nVersion: {installed_version}\n", encoding="utf-8"
+    )
+    (tmp_path / "check.bat").write_text(
+        "@echo off\ncall :backend_ready\nexit /b %errorlevel%\n" + subroutine.group(), encoding="ascii"
+    )
+    result = subprocess.run(
+        [os.environ["COMSPEC"], "/d", "/c", "check.bat"], cwd=tmp_path,
+        env={**os.environ, "VENV_PYTHON": sys.executable, "PYTHONPATH": str(tmp_path)},
+        capture_output=True, timeout=30,
+    )
+    assert (result.returncode == 0) == ready, result.stdout + result.stderr

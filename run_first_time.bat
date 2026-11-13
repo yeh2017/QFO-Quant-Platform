@@ -3,7 +3,7 @@ setlocal
 chcp 65001 >nul 2>&1
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
-title QFO Launcher
+title QFO - First-time Setup
 
 set "ROOT=%~dp0"
 set "BACKEND=%ROOT%backend"
@@ -11,9 +11,9 @@ set "FRONTEND=%ROOT%frontend"
 set "VENV_PYTHON=%BACKEND%\.venv\Scripts\python.exe"
 
 echo ==========================================
-echo      QFO - Windows Launcher
+echo      QFO - First-time Setup
 echo ==========================================
-echo   ROOT: %ROOT%
+echo   ROOT: "%ROOT%"
 echo.
 
 echo [1/5] Checking Python 3.12 or newer...
@@ -92,49 +92,8 @@ echo   [OK] .env exists
 if /i "%~1"=="--prepare-only" exit /b 0
 
 echo [5/5] Starting services...
-if not exist "%BACKEND%\logs" mkdir "%BACKEND%\logs"
-call :backend_http_ready
-if not errorlevel 1 goto start_frontend
-powershell -NoProfile -Command "$ErrorActionPreference='Stop'; Start-Process -FilePath $env:VENV_PYTHON -ArgumentList @('-X','utf8','-m','uvicorn','main:app','--host','127.0.0.1','--port','8000') -WorkingDirectory $env:BACKEND -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:BACKEND 'logs\backend.stdout.log') -RedirectStandardError (Join-Path $env:BACKEND 'logs\backend.stderr.log')"
-if errorlevel 1 goto fail
-set "TRIES=0"
-:wait_backend
-call :backend_http_ready
-if not errorlevel 1 goto start_frontend
-set /a TRIES+=1 >nul
-if %TRIES% geq 30 (
-    echo   [FAIL] Backend is not ready. Check backend\logs\backend.stderr.log.
-    echo   Close any other QFO instance using port 8000 and try again.
-    goto fail
-)
-powershell -NoProfile -Command "Start-Sleep -Seconds 1"
-goto wait_backend
-
-:start_frontend
-call :frontend_http_ready
-if not errorlevel 1 goto services_ready
-powershell -NoProfile -Command "$ErrorActionPreference='Stop'; Start-Process -FilePath (Get-Command node.exe).Source -ArgumentList @('node_modules/vite/bin/vite.js','--host','127.0.0.1','--port','3000','--strictPort') -WorkingDirectory $env:FRONTEND -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:BACKEND 'logs\frontend.stdout.log') -RedirectStandardError (Join-Path $env:BACKEND 'logs\frontend.stderr.log')"
-if errorlevel 1 goto fail
-set "TRIES=0"
-:wait_frontend
-call :frontend_http_ready
-if not errorlevel 1 goto services_ready
-set /a TRIES+=1 >nul
-if %TRIES% geq 20 (
-    echo   [FAIL] Frontend is not ready. Check backend\logs\frontend.stderr.log.
-    goto fail
-)
-powershell -NoProfile -Command "Start-Sleep -Seconds 1"
-goto wait_frontend
-
-:services_ready
-echo.
-echo   [OK] Backend and frontend are responding.
-echo   Open: http://127.0.0.1:3000
-start "" http://127.0.0.1:3000
-echo   Press any key to close this launcher...
-pause >nul
-exit /b 0
+call "%ROOT%run_quick_start.bat"
+exit /b %errorlevel%
 
 :fail
 echo.
@@ -161,7 +120,7 @@ set "PYTHON_EXE=%~1"
 exit /b 0
 
 :backend_ready
-"%VENV_PYTHON%" -X utf8 -c "import uvicorn, fastapi, pandas, numpy, sqlalchemy, jinja2, structlog, scipy, sklearn, akshare, tushare, baostock, dotenv"
+"%VENV_PYTHON%" -X utf8 -c "import sys; from importlib.metadata import version; sys.exit(1) if version('akshare') != '1.18.91' else None; import uvicorn, fastapi, pandas, numpy, sqlalchemy, jinja2, structlog, scipy, sklearn, akshare, tushare, baostock, dotenv"
 exit /b %errorlevel%
 
 :frontend_ready
@@ -205,11 +164,3 @@ if not errorlevel 1 (
 popd
 echo   [FAIL] Frontend installation failed. See npm output for the cause.
 exit /b 1
-
-:backend_http_ready
-powershell -NoProfile -Command "try { $r=Invoke-RestMethod 'http://127.0.0.1:8000/openapi.json' -TimeoutSec 2; $v=(Get-Content -Raw -LiteralPath (Join-Path $env:ROOT 'VERSION')).Trim(); if ($r.info.version -eq $v) { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>&1
-exit /b %errorlevel%
-
-:frontend_http_ready
-powershell -NoProfile -Command "try { $r=Invoke-WebRequest 'http://127.0.0.1:3000/' -TimeoutSec 2 -UseBasicParsing; if ($r.StatusCode -eq 200) { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>&1
-exit /b %errorlevel%
