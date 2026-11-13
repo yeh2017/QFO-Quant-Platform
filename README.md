@@ -1,6 +1,6 @@
 <h1 align="center">QFO量化回测平台</h1>
 
-> **v1.0.4** 为 Windows 首次安装恢复腾讯云备用源，并补充网络和 DNS 排查提示。安装包仍为轻量联网版。详见 [发布说明](RELEASE_NOTES.md)。
+> **v1.0.5** 累计继承 v1.0.3 的功能修复和 v1.0.4 的安装改进，分离首次／快速启动、恢复可见日志窗口与等待进度，并固定 AkShare 1.18.91。安装包仍为轻量联网版。详见 [发布说明](RELEASE_NOTES.md)与[更新日志](CHANGELOG.md)。
 
 <p align="center">
   <strong>免费开源、本地运行的 A 股量化研究与回测平台</strong>
@@ -138,11 +138,11 @@ run_first_time.bat
 
 推荐首次运行、新电脑运行、刚从 Git 下载项目后使用。
 
-它会检查环境、安装依赖、创建 `.env`，适合完整初始化项目。
+它会检查环境、安装依赖、创建缺失的 `.env`，然后调用快速启动脚本。首次下载、升级或重建环境后使用；不会删除已有数据库和配置。
 
 ### run_quick_start.bat
 
-日常快速启动使用。
+日常快速启动使用。只启动服务，不自动安装依赖或修改配置；环境缺失时会提示运行首次启动脚本。
 
 它默认你已经运行过 `run_first_time.bat`，并且本地已经存在：
 
@@ -151,6 +151,10 @@ run_first_time.bat
 - `backend/.env`
 
 如果是第一次下载项目，不建议直接运行 `run_quick_start.bat`。
+
+两个入口最终都显示后端 `http://localhost:8000` 和前端 `http://localhost:3000`。等待时显示 `[WAIT]`，就绪时显示 `[OK]`，超时显示 `[FAIL]`。后端最多检查 30 次、前端 20 次；已就绪则直接继续，不是固定等待 30／20 秒。
+
+使用期间请保持 **QFO Backend** 和 **QFO Frontend** 窗口打开；启动器窗口可以关闭。服务仅监听本机回环地址。
 
 ## Git 上传说明
 
@@ -324,7 +328,7 @@ QFO 支持新闻摘要、精选新闻和高分事件推送。推送能力默认�
 
 Python 虚拟环境可能保留原电脑的路径，建议在目标电脑重新下载稳定版并运行 `run_first_time.bat`，由本机创建环境。保留数据请按[迁移说明](docs/upgrade-data-migration.md)复制数据库，避免直接复用其他电脑的 `backend/.venv` 和 `frontend/node_modules`。
 
-v1.0.3 会选择 Python 3.12+，并使用当前环境的 `python -X utf8 -m pip` 安装依赖。`UnicodeDecodeError: 'gbk'` 属于编码问题，单纯更换镜像不能解决。窗口会显示实际使用的 Python 路径；服务启动日志位于 `backend/logs/`。
+自 v1.0.3 起会选择 Python 3.12+，并使用当前环境的 `python -X utf8 -m pip` 安装依赖。`UnicodeDecodeError: 'gbk'` 属于编码问题，单纯更换镜像不能解决。窗口会显示实际使用的 Python 路径；v1.0.5 的服务启动输出显示在 QFO Backend 和 QFO Frontend 窗口中。
 
 v1.0.4 及以上会按阿里云、腾讯云、官方 PyPI 的顺序尝试安装后端依赖。如果看到 `Failed to resolve` 或 `getaddrinfo failed`，请检查 DNS，或切换网络后重跑首次启动脚本。首次安装仍需联网。
 
