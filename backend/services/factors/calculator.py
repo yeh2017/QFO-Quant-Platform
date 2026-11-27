@@ -66,9 +66,22 @@ def get_factor_weights() -> dict:
 
 
 def get_factor_col_map() -> dict:
-    """返回 {name: [(col, lower_better), ...]} 字典，仅活跃且有 fast_cols 的因子"""
-    return {k: v["fast_cols"] for k, v in FACTOR_REGISTRY.items()
-            if v["weight"] > 0 and v["fast_cols"]}
+    """返回 {name: [(col, lower_better, exclude_negative), ...]} 字典，仅活跃且有 fast_cols 的因子
+
+    fast_cols 支持 2-tuple (col, lower_better) 和 3-tuple (col, lower_better, exclude_negative)。
+    2-tuple 默认 exclude_negative=True（向后兼容）。
+    """
+    result = {}
+    for k, v in FACTOR_REGISTRY.items():
+        if v["weight"] > 0 and v["fast_cols"]:
+            normalized = []
+            for item in v["fast_cols"]:
+                if len(item) == 2:
+                    normalized.append((item[0], item[1], True))  # 默认排除负值
+                else:
+                    normalized.append(tuple(item))
+            result[k] = normalized
+    return result
 
 
 def get_factor_labels() -> dict:
@@ -117,7 +130,7 @@ def calc_reversal_factor(history: Optional[List[Dict]] = None, **_) -> float:
 
 
 @register_factor("value", weight=0.17, label="价值",
-                  fast_cols=[("pe_ttm", True), ("pb", True)],
+                  fast_cols=[("pe_ttm", True, True), ("pb", True, True)],
                   desc="PE/PB越低越有价值",
                   items=["PE", "PB", "PS"],
                   category="fundamental")
@@ -198,7 +211,7 @@ def calc_quality_factor(financial: Optional[Dict], **_) -> float:
 
 
 @register_factor("size", weight=0.12, label="规模",
-                  fast_cols=[("total_mv", True)],
+                  fast_cols=[("total_mv", True, True)],
                   desc="小市值股票长期超额收益显著（A股特色）",
                   items=["市值对数", "小市值溢价"],
                   category="risk")
@@ -244,7 +257,7 @@ def calc_momentum_factor(history: Optional[List[Dict]] = None, **_) -> float:
 
 
 @register_factor("lowvol", weight=0.08, label="低波",
-                  fast_cols=[("volatility_20", True)],
+                  fast_cols=[("volatility_20", True, True)],
                   desc="低波动股票长期风险调整收益更优",
                   items=["波动率", "Beta"],
                   category="risk")
@@ -306,7 +319,7 @@ def calc_dividend_factor(ts_daily: Optional[Dict] = None, **_) -> float:
 
 
 @register_factor("concentration", weight=0.01, label="筹码集中",
-                  fast_cols=[("holder_change_rate", True)],
+                  fast_cols=[("holder_change_rate", True, False)],
                   desc="股东户数减少代表筹码集中，主力吸筹信号",
                   items=["股东户数变化率"],
                   category="fundamental")

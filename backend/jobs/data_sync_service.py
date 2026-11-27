@@ -364,7 +364,7 @@ class DataSyncService:
             ),
             SyncStep(
                 name="index_weight", label="指数成分权重", weight=2,
-                fn=lambda: self._sync_index_weight(),
+                fn=lambda: self._sync_index_weight(force_refill=force_refill),
                 skip_if=_scope_skip("stock") or (
                     (not force_refill) and self._is_up_to_date("index_weight")),
                 min_points=2000,
@@ -382,6 +382,12 @@ class DataSyncService:
                 skip_if=_scope_skip("events") or (
                     (not force_refill) and self._is_events_up_to_date()),
                 min_points=5000,
+            ),
+            SyncStep(
+                name="namechange", label="名称变更历史", weight=1,
+                fn=self._sync_namechange,
+                skip_if=_scope_skip("stock"),
+                min_points=120,
             ),
             SyncStep(
                 name="signals", label="因子评分+每日信号", weight=5,
@@ -696,8 +702,10 @@ class DataSyncService:
         from jobs.sync_industry import sync_industry_index
         return sync_industry_index(self._ts, start_date, end_date)
 
-    def _sync_index_weight(self):
-        from jobs.sync_index_weight import sync_index_weight
+    def _sync_index_weight(self, force_refill: bool = False):
+        from jobs.sync_index_weight import sync_index_weight, backfill_index_weight
+        if force_refill:
+            return backfill_index_weight(self._ts)
         return sync_index_weight(self._ts)
 
     def _sync_margin(self, start_date: str = None, end_date: str = None, force_refill: bool = False):
@@ -707,6 +715,70 @@ class DataSyncService:
     def _sync_events(self, start_date: str, end_date: str, force_refill: bool = False):
         from jobs.sync_events import sync_events
         return sync_events(self._ts, start_date, end_date, force_refill)
+
+    # ================================================================
+    #  名称变更历史同步（ST 涨跌停阈值 PIT 判断数据源）
+    # ================================================================
+
+    def _sync_namechange(self):
+        """
+        全量拉取 Tushare namechange，upsert 到 stock_name_history。
+        数据量极小（~1 万行），始终全量刷新，无需水位控制。
+        """
+        import data_sources.tushare_source as tushare_module
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        from models.quant_data import StockNameHistory
+
+        @tushare_module.with_tushare_retry(max_retries=2, delay=1.0)
+        def _fetch():
+            return self._ts.pro.namechange(
+                fields="ts_code,name,start_date,end_date,change_reason"
+            )
+
+        df = _fetch()
+        if df is None or df.empty:
+            log.warning("namechange_empty")
+            return {"rows": 0}
+
+        def _fmt(d):
+            """YYYYMMDD → YYYY-MM-DD，NaN → None"""
+            if pd.isna(d) or d is None:
+                return None
+            s = str(d).replace("-", "")[:8]
+            return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+
+        records = []
+        for _, row in df.iterrows():
+            sd = _fmt(row.get("start_date"))
+            if not sd:
+                continue  # start_date 是 PK，不可为空
+            records.append({
+                "code": row["ts_code"],
+                "start_date": sd,
+                "name": row.get("name", ""),
+                "end_date": _fmt(row.get("end_date")),
+                "change_reason": row.get("change_reason"),
+            })
+
+        from settings import WRITE_BATCH_SIZE
+        BATCH = WRITE_BATCH_SIZE
+        with db_session() as db:
+            for i in range(0, len(records), BATCH):
+                chunk = records[i: i + BATCH]
+                stmt = sqlite_insert(StockNameHistory).values(chunk)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["code", "start_date"],
+                    set_={
+                        "name": stmt.excluded.name,
+                        "end_date": stmt.excluded.end_date,
+                        "change_reason": stmt.excluded.change_reason,
+                    },
+                )
+                db.execute(stmt)
+            db.flush()
+
+        log.info("namechange_synced", rows=len(records))
+        return {"rows": len(records)}
 
     # ================================================================
     #  每日信号生成

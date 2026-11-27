@@ -37,6 +37,10 @@ const buildSourceLabel = ({ sourceType, codesCount, universeConfig }) => {
     if (sourceType === 'pool') return `自选池 ${codesCount || 0} 只`;
     if (sourceType === 'factor_filter') return `因子筛选 ${codesCount || universeConfig?.max_stocks || '?'} 只`;
     if (sourceType === 'full_market') return `全市场 ${codesCount || universeConfig?.max_stocks || '?'} 只`;
+    if (sourceType === 'index') {
+        const indexLabels = { hs300: '沪深300', zz500: '中证500', zz1000: '中证1000' };
+        return `${indexLabels[universeConfig?.index] || '指数'} ${codesCount || universeConfig?.max_stocks || '?'} 只`;
+    }
     return '未知来源';
 };
 
@@ -417,6 +421,7 @@ const QuantPlatform = () => {
                         <div>
                             <h1 className="text-3xl font-bold text-white mb-2">
                                 QFO量化回测平台
+                                <span className="text-base font-normal text-purple-200 ml-2">v1.0.6</span>
                             </h1>
                             <p className="text-purple-100">多数据源集成 | 因子模块 | 策略回测 | 组合优化</p>
                         </div>
@@ -425,7 +430,7 @@ const QuantPlatform = () => {
                                 <div className="text-purple-100 text-sm mb-1">数据中台</div>
                                 <div className="flex items-center gap-2">
                                     <div className="w-3 h-3 rounded-full bg-green-400 animate-pulse" />
-                                    <span className="text-white font-bold">Tushare Pro</span>
+                                    <a href="https://tushare.pro" target="_blank" rel="noreferrer" className="text-white font-bold hover:text-purple-200 transition-colors">Tushare Pro</a>
                                 </div>
                             </div>
                             <button onClick={() => setShowSettings(true)}

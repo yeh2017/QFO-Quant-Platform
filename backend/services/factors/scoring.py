@@ -145,16 +145,22 @@ def score_factors_vectorized(
         w = factor_weights.get(factor_name, 0.1)
 
         sub_scores = []
-        for col, lower_better in col_rules:
+        for col_spec in col_rules:
+            # 支持 (col, lower_better, exclude_negative) 3-tuple 和 (col, lower_better) 2-tuple
+            if len(col_spec) == 3:
+                col, lower_better, exclude_negative = col_spec
+            else:
+                col, lower_better = col_spec
+                exclude_negative = True  # 默认排除负值（向后兼容）
             if col not in df.columns:
                 continue
             s = pd.to_numeric(df[col], errors="coerce")
             valid_mask = s.notna() & np.isfinite(s)
             if valid_mask.sum() < 3:
                 continue
-            # lower_better 因子（PE/PB/市值/波动率）：≤0 无经济含义，排除后再排名
-            # 例：PE<0 表示亏损，不是"更便宜"；PB<0 表示资不抵债
-            if lower_better:
+            # 仅对明确标记 exclude_negative 的因子（PE/PB/市值/波动率）过滤非正值
+            # holder_change_rate 等负值有经济含义的因子不过滤（SC-02 修复）
+            if lower_better and exclude_negative:
                 s = s.where(s > 0)
                 if s.notna().sum() < 3:
                     continue

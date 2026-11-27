@@ -239,6 +239,25 @@ class StockShareholderCount(Base):
     )
 
 
+class StockNameHistory(Base):
+    """
+    股票名称变更历史表（Tushare namechange API）
+    用于回测层 ST 涨跌停阈值的 PIT（时点准确）判断。
+    实时层仍使用 StockBasicInfo.name（当日名称）。
+    """
+    __tablename__ = "stock_name_history"
+
+    code = Column(String(20), primary_key=True, comment="股票代码")
+    start_date = Column(String(10), primary_key=True, comment="名称生效日 YYYY-MM-DD")
+    name = Column(String(50), comment="股票名称")
+    end_date = Column(String(10), nullable=True, comment="名称失效日 YYYY-MM-DD（NULL=当前名称）")
+    change_reason = Column(String(50), nullable=True, comment="变更原因")
+
+    __table_args__ = (
+        Index('idx_namehistory_code', 'code'),
+    )
+
+
 class SyncWatermark(Base):
     """
     同步水位表

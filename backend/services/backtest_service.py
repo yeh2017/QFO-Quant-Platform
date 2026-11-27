@@ -80,6 +80,10 @@ class BacktestService:
                 provider, start_date, end_date, rebal_period, max_stocks, truncate_by
             )
         if not stock_codes:
+            if universe_config and universe_config.get("type") == "index":
+                raise ValueError(
+                    "指数成分数据为空，请先在「数据管理」页执行一次「强制回填」以拉取历史成分数据"
+                )
             raise ValueError("未指定标的：请传入 codes 或 universe_config")
         # 标的类型校验：有限制的策略自动过滤不匹配代码
         allowed = self._STRATEGY_ASSET_RULES.get(strategy_type)
@@ -139,7 +143,7 @@ class BacktestService:
         rebalance_period = strategy_params.get("rebalance", rebalance_period)
         top_n_param = strategy_params.get("top_n")
         # ── Step 1: 加载价格矩阵 ──
-        price_df = self._load_price_matrix(stock_codes, start_date, end_date)
+        price_df, raw_price_df = self._load_price_matrix(stock_codes, start_date, end_date)
         if price_df.empty or price_df.shape[1] < 1:
             raise ValueError("数据不足")
         valid_codes = list(price_df.columns)
@@ -148,6 +152,7 @@ class BacktestService:
         if T < 5:
             raise ValueError(f"有效交易日不足: {T}")
         price_arr = price_df.values.astype(float)
+        raw_price_arr = raw_price_df.values.astype(float)  # 原始收盘价，用于交易标记
         ret_arr = np.diff(price_arr, axis=0) / price_arr[:-1]
         ret_arr = np.nan_to_num(ret_arr, nan=0.0, posinf=0.0, neginf=0.0)
         n = len(valid_codes)
@@ -220,6 +225,17 @@ class BacktestService:
         pos_mgr = PositionManager(commission=commission)
         rebal_indices = self._get_rebal_indices(dates, rebalance_period)
         rebal_set = set(rebal_indices)
+        # BT-03 修复：构建资产类型数组，用于 calc_cost 区分印花税
+        from utils.bar_query import classify_codes as _classify
+        _stock_db, _etf_db, _bond_db = _classify(valid_codes)
+        _etf_set_cost = set(_etf_db)
+        _bond_set_cost = set(_bond_db)
+        asset_types = np.zeros(n, dtype=int)  # 0=股票
+        for _idx, _code in enumerate(valid_codes):
+            if _code in _etf_set_cost:
+                asset_types[_idx] = 1  # ETF
+            elif _code in _bond_set_cost:
+                asset_types[_idx] = 2  # 可转债
         # 动态标的池：将预算的 per_date_codes 重映射到 price_df 的实际调仓日
         if per_date_codes is not None:
             pre_keys = sorted(per_date_codes.keys())  # 预算阶段的调仓日
@@ -248,9 +264,19 @@ class BacktestService:
             # ── Phase 1: 执行上一轮的 pending 决策（T日信号 → T+1日执行） ──
             if pending is not None:
                 weights = pending['weights'].copy()
-                # 不可卖出检查：区分停牌（保留权重等复牌）和退市（强制清仓）
+                # 价格缺失守卫：NaN 价格 = 无法成交，保持原权重不做任何交易
                 for idx in range(n):
-                    if weights[idx] == 0 and current_weights[idx] > 0 and not can_sell[i][idx]:
+                    if np.isnan(price_arr[i, idx]):
+                        weights[idx] = current_weights[idx]
+                # 不可买入检查：涨停/停牌股不可新建仓或加仓
+                for idx in range(n):
+                    if weights[idx] > current_weights[idx] and not can_buy[i][idx]:
+                        weights[idx] = current_weights[idx]  # 恢复为原权重
+                # 不可卖出检查：区分停牌（保留权重等复牌）和退市（强制清仓）
+                # E1 修复：判断条件从 `== 0`（仅完全清仓）改为 `< current_weights`（含减仓），
+                # 防止跌停日部分减仓绕过限制
+                for idx in range(n):
+                    if weights[idx] < current_weights[idx] and not can_sell[i][idx]:
                         if delist_mask[i, idx]:
                             pass  # 退市：强制清仓，不恢复权重
                         else:
@@ -259,7 +285,7 @@ class BacktestService:
                 if weights.sum() > 0:
                     weights = weights / weights.sum()
                 # 交易成本（在执行日扣除）
-                portfolio_rets[i] -= pos_mgr.calc_cost(current_weights, weights)
+                portfolio_rets[i] -= pos_mgr.calc_cost(current_weights, weights, asset_types)
                 # ── 交易标记（使用执行日日期和价格） ──
                 prev_top = set(np.where(current_weights > 0)[0])
                 new_top = set(np.where(weights > 0)[0])
@@ -270,8 +296,8 @@ class BacktestService:
                 # 完全清仓（退出组合）
                 for idx in prev_top - new_top:
                     code = valid_codes[idx]
-                    raw_price = price_arr[i, idx]
-                    sell_price = float(raw_price) if not np.isnan(raw_price) else 0.0
+                    rp = raw_price_arr[i, idx]
+                    sell_price = float(rp) if not np.isnan(rp) else 0.0
                     buy_price = entry_prices.pop(code, sell_price)
                     pnl = round((sell_price / buy_price - 1) * 100, 1) if buy_price > 0 else 0.0
                     reason = "退市清仓" if delist_mask[i, idx] else p_reason_sell
@@ -284,8 +310,8 @@ class BacktestService:
                 # 新建仓（进入组合）
                 for idx in new_top - prev_top:
                     code = valid_codes[idx]
-                    raw_price = price_arr[i, idx]
-                    buy_price = float(raw_price) if not np.isnan(raw_price) else 0.0
+                    rp = raw_price_arr[i, idx]
+                    buy_price = float(rp) if not np.isnan(rp) else 0.0
                     entry_prices[code] = buy_price
                     trade_markers[code].append({
                         "time": dates[i], "type": "buy",
@@ -302,8 +328,8 @@ class BacktestService:
                     if delta < 0.005:
                         continue  # 权重变化 < 0.5% 忽略
                     code = valid_codes[idx]
-                    raw_price = price_arr[i, idx]
-                    price = float(raw_price) if not np.isnan(raw_price) else 0.0
+                    rp = raw_price_arr[i, idx]
+                    price = float(rp) if not np.isnan(rp) else 0.0
                     if new_w > old_w:
                         trade_markers[code].append({
                             "time": dates[i], "type": "buy",
@@ -323,6 +349,9 @@ class BacktestService:
                             "ctx": p_reason_ctx.get(idx, "") if p_is_signal else "",
                         })
                 current_weights = weights
+                # BT-01 修复：根据实际执行后的权重重建 holding 状态，
+                # 而非依赖 Phase3 的乐观更新（signals_to_weights_daily 不再修改 holding）
+                holding = current_weights > 1e-6
                 # 记录持仓快照（执行日）
                 top_holdings = [
                     {"code": valid_codes[j], "weight": round(float(weights[j]) * 100, 1)}
@@ -336,12 +365,18 @@ class BacktestService:
             portfolio_rets[i] += float(np.dot(current_weights, ret_arr[i]))
 
             # ── Phase 2.5: 主动退市清仓（不等 pending，立即清零权重） ──
-            has_delist_liquidation = False
-            for idx in range(n):
-                if current_weights[idx] > 0 and delist_mask[i, idx]:
+            # BT-04 修复：批量计算退市清仓的交易成本
+            delist_today = [idx for idx in range(n)
+                            if current_weights[idx] > 0 and delist_mask[i, idx]]
+            if delist_today:
+                new_w_delist = current_weights.copy()
+                for idx in delist_today:
+                    new_w_delist[idx] = 0.0
+                portfolio_rets[i] -= pos_mgr.calc_cost(current_weights, new_w_delist, asset_types)
+                for idx in delist_today:
                     code = valid_codes[idx]
-                    raw_price = price_arr[i, idx]
-                    sell_price = float(raw_price) if not np.isnan(raw_price) else 0.0
+                    rp = raw_price_arr[i, idx]
+                    sell_price = float(rp) if not np.isnan(rp) else 0.0
                     buy_price = entry_prices.pop(code, sell_price)
                     pnl = round((sell_price / buy_price - 1) * 100, 1) if buy_price > 0 else 0.0
                     trade_markers[code].append({
@@ -351,15 +386,15 @@ class BacktestService:
                     })
                     current_weights[idx] = 0.0
                     holding[idx] = False
-                    has_delist_liquidation = True
-            if has_delist_liquidation and current_weights.sum() > 0:
-                current_weights = current_weights / current_weights.sum()
+                if current_weights.sum() > 0:
+                    current_weights = current_weights / current_weights.sum()
 
             # ── Phase 3: 信号/因子层 → 产生 pending 决策（下一交易日执行） ──
+            # 注意：can_buy/can_sell 检查已移至 Phase 1（执行日），
+            # 此处仅做信号清洗，不做交易可行性过滤，避免信号日≠执行日的时间点错误
             if is_signal and signal_matrix is not None:
-                # 停牌/涨跌停过滤：不可买的清除买入信号，不可卖的清除卖出信号
                 filtered_signals = signal_matrix[i].copy()
-                filtered_signals[(filtered_signals > 0) & ~can_buy[i]] = 0
+                # 不可卖的清除卖出信号（卖出受限在信号日即可判断：停牌/跌停持续到次日概率高）
                 filtered_signals[(filtered_signals < 0) & ~can_sell[i]] = 0
                 # 动态标的池：不在当期池内的标的禁止买入
                 if per_date_codes is not None:
@@ -402,8 +437,7 @@ class BacktestService:
                     as_of_date=dates[i],
                     max_single_weight=max_single_weight,
                 )
-                # 因子策略：不可买入的标的权重清零
-                new_w[~can_buy[i]] = 0
+                # 因子策略：can_buy 检查已移至 Phase 1 执行日，此处不过滤
                 # 动态标的池：不在当期池内的标的权重清零
                 if per_date_codes is not None:
                     active_set = set(per_date_codes.get(dates[i], []))
@@ -425,6 +459,69 @@ class BacktestService:
                     'reason_ctx': {},
                     'is_signal': False,
                 }
+        # BT-02 修复：循环结束后执行残留的 pending 决策
+        # 当最后一次迭代（i=T-2）产生 pending 时，循环无法在 i=T-1 执行它。
+        # 此处仅记录交易标记和更新 current_weights，不追加到 portfolio_rets（已无未来收益可算）。
+        if pending is not None:
+            last_i = T - 1  # dates 的最后一个索引
+            weights = pending['weights'].copy()
+            # 价格缺失守卫
+            for idx in range(n):
+                if np.isnan(price_arr[last_i, idx]):
+                    weights[idx] = current_weights[idx]
+            # 不可买入检查
+            for idx in range(n):
+                if weights[idx] > current_weights[idx] and not can_buy[last_i][idx]:
+                    weights[idx] = current_weights[idx]
+            # 不可卖出检查（E1 修复同步）
+            for idx in range(n):
+                if weights[idx] < current_weights[idx] and not can_sell[last_i][idx]:
+                    if not delist_mask[last_i, idx]:
+                        weights[idx] = current_weights[idx]
+            if weights.sum() > 0:
+                weights = weights / weights.sum()
+            # 交易标记
+            p_reason_buy = pending['reason_buy']
+            p_reason_sell = pending['reason_sell']
+            p_reason_ctx = pending.get('reason_ctx', {})
+            p_is_signal = pending.get('is_signal', False)
+            prev_top = set(np.where(current_weights > 0)[0])
+            new_top = set(np.where(weights > 0)[0])
+            for idx in prev_top - new_top:
+                code = valid_codes[idx]
+                rp = raw_price_arr[last_i, idx]
+                sell_price = float(rp) if not np.isnan(rp) else 0.0
+                buy_price = entry_prices.pop(code, sell_price)
+                pnl = round((sell_price / buy_price - 1) * 100, 1) if buy_price > 0 else 0.0
+                reason = "退市清仓" if delist_mask[last_i, idx] else p_reason_sell
+                trade_markers[code].append({
+                    "time": dates[last_i], "type": "sell",
+                    "price": sell_price, "weight": 0.0,
+                    "reason": reason, "pnl": pnl,
+                    "ctx": p_reason_ctx.get(idx, "") if p_is_signal else "",
+                })
+            for idx in new_top - prev_top:
+                code = valid_codes[idx]
+                rp = raw_price_arr[last_i, idx]
+                buy_price = float(rp) if not np.isnan(rp) else 0.0
+                entry_prices[code] = buy_price
+                trade_markers[code].append({
+                    "time": dates[last_i], "type": "buy",
+                    "price": buy_price,
+                    "weight": round(float(weights[idx]) * 100, 1),
+                    "reason": p_reason_buy, "pnl": None,
+                    "ctx": p_reason_ctx.get(idx, "") if p_is_signal else "",
+                })
+            current_weights = weights
+            holding = current_weights > 1e-6
+            top_holdings = [
+                {"code": valid_codes[j], "weight": round(float(weights[j]) * 100, 1)}
+                for j in range(n) if weights[j] > 0.001
+            ]
+            if top_holdings:
+                holdings_snapshots.append({"date": dates[last_i], "holdings": top_holdings})
+            pending = None
+
         # 注入股票名称到持仓快照
         if holdings_snapshots:
             name_map = self._get_stock_names(valid_codes)
@@ -433,9 +530,11 @@ class BacktestService:
                     h["name"] = name_map.get(h["code"], h["code"].split('.')[0])
         # ── Step 4: 模拟层 ── 绩效计算
         engine = BacktestEngine()
-        bench_daily = self._get_benchmark_returns(start_date, end_date, T - 1)
+        bench_daily = self._get_benchmark_returns(start_date, end_date, T - 1, dates=dates)
         # rebal_indices +1 对齐执行日（信号在 i 产生，执行在 i+1）
-        exec_indices = [min(r + 1, T - 2) for r in rebal_indices]
+        # BT-02 修复：钳位上限改为 T-1（portfolio_rets 最大有效索引），
+        # 并去重避免两个调仓日映射到同一执行索引
+        exec_indices = sorted(set(min(r + 1, T - 2) for r in rebal_indices))
         result = engine.calc_performance(
             portfolio_rets, initial_cash, exec_indices, T,
             bench_daily, trade_markers, dates,
@@ -457,8 +556,8 @@ class BacktestService:
 
     def _load_price_matrix(
         self, codes: List[str], start_date: str, end_date: str
-    ) -> "pd.DataFrame":
-        """一次 SQL 取全部股票前复权收盘价，返回 DataFrame（LRU 缓存）"""
+    ) -> "Tuple[pd.DataFrame, pd.DataFrame]":
+        """一次 SQL 取全部股票前复权收盘价，返回 (前复权价格DF, 原始价格DF)（LRU 缓存）"""
         cache_key = (frozenset(codes), start_date, end_date)
         if cache_key in self._price_cache:
             self._price_cache.move_to_end(cache_key)  # LRU：命中移到末尾
@@ -527,8 +626,12 @@ class BacktestService:
         # 前复权处理：按 code 分组
         etf_code_set = set(etf_codes)  # 用 classify_codes 的结果判断
         adjusted_rows = []
+        raw_rows = []
         for code, grp in df.groupby("code"):
             grp = grp.sort_values("trade_date").reset_index(drop=True)
+            # 保留原始收盘价（用于交易标记展示）
+            raw_grp = grp[["code", "trade_date", "close"]].copy()
+            raw_rows.append(raw_grp)
             adj_col = grp["adj_or_pre"]
             has_adj = adj_col.notna().sum() > 0
             if has_adj and code not in etf_code_set:
@@ -552,7 +655,11 @@ class BacktestService:
             adjusted_rows.append(grp[["code", "trade_date", "close"]])
         df = pd.concat(adjusted_rows, ignore_index=True)
         price_df = df.pivot(index="trade_date", columns="code", values="close")
+        # 构建原始价格矩阵（用于交易标记展示实际成交价）
+        raw_df = pd.concat(raw_rows, ignore_index=True)
+        raw_price_df = raw_df.pivot(index="trade_date", columns="code", values="close")
         price_df = price_df.ffill(limit=5)
+        raw_price_df = raw_price_df.ffill(limit=5)
         # 清除退市股最后交易日之后的 ffill 残留值（与 delist_mask 的 cutoff 对齐）
         from models.quant_data import StockBasicInfo, StockDailyBar as _SDB
         from sqlalchemy import func as _sa_func
@@ -591,9 +698,13 @@ class BacktestService:
                     lb = last_bar_map.get(code)
                     if lb:
                         price_df.loc[price_df.index > lb, code] = np.nan
+                        if code in raw_price_df.columns:
+                            raw_price_df.loc[raw_price_df.index > lb, code] = np.nan
         price_df = price_df.dropna(axis=1, thresh=int(len(price_df) * 0.7))
-        self._price_cache[cache_key] = price_df
-        return price_df
+        # raw_price_df 保持与 price_df 相同的列
+        raw_price_df = raw_price_df[price_df.columns]
+        self._price_cache[cache_key] = (price_df, raw_price_df)
+        return price_df, raw_price_df
 
     def _resolve_universe(
         self, provider, start_date: str, end_date: str, rebalance_period: str,
@@ -753,10 +864,48 @@ class BacktestService:
 
         # 加载真实 pct_chg 和 volume（仅股票，ETF/可转债不做停牌判断）
         date_to_tidx = {d: t for t, d in enumerate(dates)}
+        # 预加载上市日期，用于新股首日不设涨跌停限制
+        list_date_map: Dict[str, str] = {}
+
+        # 预加载 ST 名称变更历史，用于 PIT 判断涨跌停阈值（5% vs 10%/20%）
+        st_date_set: set = set()
+        try:
+            from models.quant_data import StockNameHistory
+            with db_session() as db:
+                nh_rows = (
+                    db.query(
+                        StockNameHistory.code,
+                        StockNameHistory.name,
+                        StockNameHistory.start_date,
+                        StockNameHistory.end_date,
+                    )
+                    .filter(StockNameHistory.name.contains("ST"))
+                    .all()
+                )
+                for nh_code, nh_name, nh_start, nh_end in nh_rows:
+                    if nh_code not in code_to_idx:
+                        continue
+                    for td in dates:
+                        if td >= nh_start and (nh_end is None or td <= nh_end):
+                            st_date_set.add((nh_code, td))
+        except Exception as _e:
+            # 表不存在或未同步 → 降级为原有逻辑（所有股票按板块固定阈值）
+            log.debug("st_history_load_fallback", error=str(_e))
 
         BATCH_SIZE = 900
         with db_session() as db:
             if stock_codes_db:
+                # 查询上市日期
+                ld_rows = (
+                    db.query(StockBasicInfo.code, StockBasicInfo.list_date)
+                    .filter(
+                        StockBasicInfo.code.in_(stock_codes_db),
+                        StockBasicInfo.list_date.isnot(None),
+                    )
+                    .all()
+                )
+                list_date_map = {r.code: str(r.list_date) for r in ld_rows}
+
                 rows = []
                 for i in range(0, len(stock_codes_db), BATCH_SIZE):
                     batch = stock_codes_db[i: i + BATCH_SIZE]
@@ -798,38 +947,86 @@ class BacktestService:
                         continue  # 保持 False
 
                     # 有成交量 → 可交易，但需检查涨跌停
-                    can_buy[tidx, idx] = pct < limit_up_thresholds[idx]
-                    can_sell[tidx, idx] = pct > limit_down_thresholds[idx]
+                    # 新股上市首日不设涨跌停限制（注册制首日涨跌幅限制为44%，此处简化为不限制）
+                    is_ipo_day = list_date_map.get(code) == td
+
+                    # ST 股票涨跌停 ±5%（含余量 4.5%），优先于板块阈值
+                    if (code, td) in st_date_set:
+                        thresh_up = 0.045
+                        thresh_down = -0.045
+                    else:
+                        thresh_up = limit_up_thresholds[idx]
+                        thresh_down = limit_down_thresholds[idx]
+
+                    can_buy[tidx, idx] = True if is_ipo_day else pct < thresh_up
+                    can_sell[tidx, idx] = True if is_ipo_day else pct > thresh_down
+
+        # E4 修复：ETF/可转债的停牌/无报价检测
+        # 原代码仅对股票做 volume 检查，ETF/转债默认 can_buy=can_sell=True。
+        # 当 ETF/转债无报价或成交量为零时，不应允许成交。
+        from models.quant_data import EtfDailyBar, ConvertibleBondBar
+        for model, sub_codes in [(EtfDailyBar, etf_codes_db), (ConvertibleBondBar, bond_codes_db)]:
+            if not sub_codes:
+                continue
+            # 先标记为不可交易（无数据 = 停牌），再逐行恢复
+            for code in sub_codes:
+                idx = code_to_idx.get(code)
+                if idx is not None:
+                    can_buy[:, idx] = False
+                    can_sell[:, idx] = False
+            with db_session() as db_etf:
+                for bi in range(0, len(sub_codes), BATCH_SIZE):
+                    batch = sub_codes[bi: bi + BATCH_SIZE]
+                    etf_rows = (
+                        db_etf.query(model.code, model.trade_date, model.volume)
+                        .filter(
+                            model.code.in_(batch),
+                            model.trade_date >= start_date,
+                            model.trade_date <= end_date,
+                        )
+                        .all()
+                    )
+                    for code, trade_date, volume in etf_rows:
+                        idx = code_to_idx.get(code)
+                        td = str(trade_date)
+                        tidx = date_to_tidx.get(td)
+                        if idx is None or tidx is None:
+                            continue
+                        vol = float(volume or 0)
+                        if vol > 0:
+                            can_buy[tidx, idx] = True
+                            can_sell[tidx, idx] = True
 
         # ── 构建退市标记矩阵（用 last_bar 而非 delist_date，消除退市整理期后的资金僵死窗口） ──
         delist_mask = np.zeros((T, N), dtype=bool)
         if stock_codes_db:
             from sqlalchemy import func as sa_func
-            delist_codes = dict(
-                db.query(StockBasicInfo.code, StockBasicInfo.delist_date)
-                .filter(StockBasicInfo.delist_date.isnot(None))
-                .all()
-            )
-            # 查每只退市股在回测期间的最后交易日
-            delist_in_pool = [c for c in code_to_idx if c in delist_codes]
-            last_bar_map = {}
-            for bi in range(0, len(delist_in_pool), BATCH_SIZE):
-                batch_d = delist_in_pool[bi:bi + BATCH_SIZE]
-                rows_d = (
-                    db.query(
-                        StockDailyBar.code,
-                        sa_func.max(StockDailyBar.trade_date).label("last_bar"),
-                    )
-                    .filter(
-                        StockDailyBar.code.in_(batch_d),
-                        StockDailyBar.trade_date >= start_date,
-                        StockDailyBar.trade_date <= end_date,
-                    )
-                    .group_by(StockDailyBar.code)
+            with db_session() as db_delist:
+                delist_codes = dict(
+                    db_delist.query(StockBasicInfo.code, StockBasicInfo.delist_date)
+                    .filter(StockBasicInfo.delist_date.isnot(None))
                     .all()
                 )
-                for code, lb in rows_d:
-                    last_bar_map[code] = str(lb)
+                # 查每只退市股在回测期间的最后交易日
+                delist_in_pool = [c for c in code_to_idx if c in delist_codes]
+                last_bar_map = {}
+                for bi in range(0, len(delist_in_pool), BATCH_SIZE):
+                    batch_d = delist_in_pool[bi:bi + BATCH_SIZE]
+                    rows_d = (
+                        db_delist.query(
+                            StockDailyBar.code,
+                            sa_func.max(StockDailyBar.trade_date).label("last_bar"),
+                        )
+                        .filter(
+                            StockDailyBar.code.in_(batch_d),
+                            StockDailyBar.trade_date >= start_date,
+                            StockDailyBar.trade_date <= end_date,
+                        )
+                        .group_by(StockDailyBar.code)
+                        .all()
+                    )
+                    for code, lb in rows_d:
+                        last_bar_map[code] = str(lb)
             for code, idx in code_to_idx.items():
                 dd = delist_codes.get(code)
                 if not dd:
@@ -922,10 +1119,18 @@ class BacktestService:
         return indices
 
     @staticmethod
-    def _get_benchmark_returns(start_date: str, end_date: str, target_len: int) -> List[float]:
-        """复用 RiskService 的基准获取（统一降级链），并对齐到目标长度。"""
+    def _get_benchmark_returns(start_date: str, end_date: str, target_len: int,
+                               dates: List[str] = None) -> List[float]:
+        """复用 RiskService 的基准获取（统一降级链），按组合交易日精确对齐。"""
         from services.risk_service import RiskService
-        rets = RiskService().get_benchmark_returns(start_date, end_date)
+        rs = RiskService()
+        if dates and len(dates) >= 2:
+            # 按日期精确对齐：组合 dates[i]→dates[i+1] 对应基准同日收益
+            bench_map = rs.get_benchmark_returns_by_date(start_date, end_date)
+            if bench_map:
+                return [bench_map.get(dates[i + 1], 0.0) for i in range(min(target_len, len(dates) - 1))]
+        # 降级：无日期列表时走旧截断逻辑
+        rets = rs.get_benchmark_returns(start_date, end_date)
         if not rets:
             return [0.0] * target_len
         if len(rets) >= target_len:

@@ -99,6 +99,7 @@ const StrategyBacktestPanel = ({
     const [universePreview, setUniversePreview] = useState(null);
     const [previewLoading, setPreviewLoading] = useState(false);
     const [activePreset, setActivePreset] = useState(null);
+    const [indexType, setIndexType] = useState('hs300'); // 指数成分池：hs300/zz500/zz1000
 
     // 预览标的池数量（防抖 500ms）
     useEffect(() => {
@@ -114,6 +115,8 @@ const StrategyBacktestPanel = ({
                 });
                 if (Object.keys(filters).length === 0) { setUniversePreview(null); return; }
                 universeConfig = { type: 'factor_filter', filters, max_stocks: Number(maxStocks) || 200 };
+            } else if (universeSource === 'index') {
+                universeConfig = { type: 'index', index: indexType, max_stocks: Number(maxStocks) || 500 };
             } else {
                 universeConfig = { type: 'full_market', max_stocks: Number(maxStocks) || 300 };
             }
@@ -126,7 +129,7 @@ const StrategyBacktestPanel = ({
         }, 500);
 
         return () => { cancelled = true; clearTimeout(timer); };
-    }, [universeSource, filterValues, maxStocks]);
+    }, [universeSource, filterValues, maxStocks, indexType]);
 
     // 加载策略列表
     useEffect(() => { loadStrategies(); }, []);
@@ -216,6 +219,11 @@ const StrategyBacktestPanel = ({
                     } else if (uc.type === 'full_market') {
                         setUniverseSource('full_market');
                         setFilterValues({});
+                        if (uc.max_stocks) setMaxStocks(uc.max_stocks);
+                    } else if (uc.type === 'index') {
+                        setUniverseSource('index');
+                        setFilterValues({});
+                        if (uc.index) setIndexType(uc.index);
                         if (uc.max_stocks) setMaxStocks(uc.max_stocks);
                     }
                 } else {
@@ -769,6 +777,7 @@ const StrategyBacktestPanel = ({
                                         })()
                                     },
                                     { value: 'factor_filter', label: '因子筛选', desc: strategyNonStock ? `仅支持股票` : '按条件动态选', defaultMax: 200, disabled: strategyNonStock },
+                                    { value: 'index', label: '指数成分', desc: strategyNonStock ? `仅支持股票` : '按历史成分回测', defaultMax: 500, disabled: strategyNonStock },
                                     { value: 'full_market', label: '全市场', desc: strategyNonStock ? `仅支持股票` : '所有上市股票', defaultMax: 300, disabled: strategyNonStock },
                                 ].map(opt => (
                                     <button key={opt.value}
@@ -785,6 +794,27 @@ const StrategyBacktestPanel = ({
                                     </button>
                                 ))}
                             </div>
+
+                            {/* 指数成分选择面板 */}
+                            {universeSource === 'index' && (
+                                <div className="flex gap-3 mt-3 pt-3 border-t border-slate-700/30">
+                                    {[
+                                        { value: 'hs300', label: '沪深300', count: 300 },
+                                        { value: 'zz500', label: '中证500', count: 500 },
+                                        { value: 'zz1000', label: '中证1000', count: 1000 },
+                                    ].map(idx => (
+                                        <button key={idx.value}
+                                            onClick={() => setIndexType(idx.value)}
+                                            className={`flex-1 text-center px-3 py-2 rounded-lg border text-sm transition-all ${indexType === idx.value
+                                                ? 'bg-teal-600/20 border-teal-500/50 text-teal-300'
+                                                : 'bg-slate-800/30 border-slate-700/30 text-white/80 hover:text-white'
+                                            }`}>
+                                            <div className="font-medium">{idx.label}</div>
+                                            <div className="text-xs text-slate-500 mt-0.5">{idx.count} 只</div>
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
 
                             {/* 因子筛选条件面板 */}
                             {universeSource === 'factor_filter' && (<>
@@ -974,6 +1004,8 @@ const StrategyBacktestPanel = ({
                                 universeConfig = { type: 'factor_filter', filters, max_stocks: Number(maxStocks) || 200, truncate_by: truncateBy };
                             } else if (universeSource === 'full_market') {
                                 universeConfig = { type: 'full_market', max_stocks: Number(maxStocks) || 300, truncate_by: truncateBy };
+                            } else if (universeSource === 'index') {
+                                universeConfig = { type: 'index', index: indexType, max_stocks: Number(maxStocks) || 500, truncate_by: truncateBy };
                             }
                             // 耗时较长时二次确认
                             if (universePreview && universePreview.estimated_seconds > 30) {

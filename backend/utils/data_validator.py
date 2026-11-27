@@ -35,7 +35,8 @@ class DataValidator:
         cls,
         df: pd.DataFrame,
         code: str = "",
-        threshold: float = None
+        threshold: float = None,
+        name: str = "",
     ) -> List[Dict[str, Any]]:
         """
         检测行情跳变（涨跌幅超过阈值）
@@ -44,6 +45,7 @@ class DataValidator:
             df: 行情数据，需包含 close 列
             code: 股票代码（用于确定涨跌幅限制）
             threshold: 自定义阈值，None则根据股票类型自动确定
+            name: 股票名称（用于识别 ST 股，代码中不含 ST 标记）
 
         Returns:
             异常记录列表
@@ -52,12 +54,15 @@ class DataValidator:
             return []
 
         if threshold is None:
-            if code.startswith('30') or code.startswith('68'):
-                threshold = cls.KC_LIMIT
-            elif 'ST' in code.upper():
+            # ST 优先判断：创业板/科创板 ST 股涨跌停仍为 ±5%，不是 ±20%
+            if name and "ST" in name.upper():
                 threshold = cls.ST_LIMIT
             else:
-                threshold = cls.NORMAL_LIMIT
+                pure = (code or "").split('.')[0]
+                if pure[:2] in ('30', '68'):
+                    threshold = cls.KC_LIMIT
+                else:
+                    threshold = cls.NORMAL_LIMIT
 
         warnings = []
         df = df.copy()
@@ -194,7 +199,8 @@ class DataValidator:
         df: pd.DataFrame,
         code: str = "",
         remove_suspensions: bool = True,
-        remove_invalid_dates: bool = True
+        remove_invalid_dates: bool = True,
+        name: str = "",
     ) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
         """综合验证并清洗数据"""
         if df is None or df.empty:
@@ -204,7 +210,7 @@ class DataValidator:
         df_clean = df.copy()
 
         # 1. 检测行情跳变
-        jump_warnings = cls.detect_price_jump(df_clean, code)
+        jump_warnings = cls.detect_price_jump(df_clean, code, name=name)
         all_warnings.extend(jump_warnings)
 
         # 2. 检测并处理停牌
