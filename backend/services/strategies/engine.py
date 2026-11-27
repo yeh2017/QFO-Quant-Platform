@@ -112,10 +112,10 @@ class BacktestEngine:
         dd_arr = (nv - peak) / peak * 100
         max_dd = round(float(-np.min(dd_arr)), 2)
 
-        # Sortino（下行波动率过小时返回 0）
-        down = portfolio_rets[portfolio_rets < 0]
-        down_std = float(np.std(down) * np.sqrt(TRADING_DAYS) * 100) if len(down) > 1 else vol
-        sortino = round(annual_return / down_std, 2) if down_std > 0.01 else 0.0
+        # Sortino（标准下行偏差：sqrt(mean(min(r,0)^2))，PE-03 修复）
+        downside = np.minimum(portfolio_rets, 0)
+        down_dev = float(np.sqrt(np.mean(downside ** 2)) * np.sqrt(TRADING_DAYS) * 100)
+        sortino = round(annual_return / down_dev, 2) if down_dev > 0.01 else 0.0
 
         # Calmar
         calmar = round(annual_return / max(max_dd, 1e-4), 2)

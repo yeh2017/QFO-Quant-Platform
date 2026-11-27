@@ -230,7 +230,7 @@ class FactorService:
         
         # 获取财务数据
         try:
-            financial = self.stock_service.get_financial_data(code)
+            financial = self.stock_service.get_financial_data(code, as_of_date=end_date)
         except (AttributeError, TypeError):
             raise
         except Exception as e:
@@ -247,7 +247,8 @@ class FactorService:
                 resolved_code = to_ts_code(code)
                 with db_session() as db:
                     q = db.query(StockShareholderCount).filter(
-                        StockShareholderCount.code == resolved_code
+                        StockShareholderCount.code == resolved_code,
+                        StockShareholderCount.end_date <= end_date,  # PIT: 仅使用查询日之前的数据
                     )
                     sh = q.order_by(StockShareholderCount.end_date.desc()).first()
                     if sh and sh.holder_num_change_rate is not None:

@@ -91,8 +91,38 @@ class StockPoolResolver:
         return codes
 
     def _resolve_index(self, mode: str) -> List[str]:
-        """从 Tushare index_weight 拉取动态成分股"""
+        """从本地 index_weight 表取最新成分，无数据时 fallback 到 Tushare API"""
         index_code, index_name = _INDEX_MAP[mode]
+
+        # 优先读本地 DB（避免每次同步都调 API）
+        try:
+            from core.database import db_session
+            from models.quant_data import IndexWeight
+            from sqlalchemy import func
+            with db_session() as db:
+                latest = (
+                    db.query(func.max(IndexWeight.trade_date))
+                    .filter(IndexWeight.index_code == index_code)
+                    .scalar()
+                )
+                if latest:
+                    codes = [
+                        r[0] for r in
+                        db.query(IndexWeight.con_code)
+                        .filter(
+                            IndexWeight.index_code == index_code,
+                            IndexWeight.trade_date == latest,
+                        )
+                        .all()
+                    ]
+                    if codes:
+                        log.info("resolve_index_local", index=index_name,
+                                 count=len(codes), date=str(latest))
+                        return codes
+        except Exception as e:
+            log.debug("resolve_index_local_failed", index=index_name, error=str(e))
+
+        # Fallback：本地无数据时调 Tushare API
         try:
             import data_sources.tushare_source as tushare_module
 
@@ -105,7 +135,7 @@ class StockPoolResolver:
                 latest_date = df["trade_date"].max()
                 latest = df[df["trade_date"] == latest_date]
                 codes = latest["con_code"].tolist()
-                log.info("resolve_index", index=index_name, count=len(codes))
+                log.info("resolve_index_api_fallback", index=index_name, count=len(codes))
                 return codes
         except Exception as e:
             log.error("resolve_index_failed", index=index_name, error=str(e))

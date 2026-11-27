@@ -329,8 +329,13 @@ class StockService:
         return [s.model_dump() for s in stocks]
     
     @cache_data(expire_days=15)
-    def get_financial_data(self, code: str, fast: bool = False) -> Optional[Dict[str, Any]]:
-        """获取财务数据（优先读本地 StockFinancial 表，未命中则 fallback API）"""
+    def get_financial_data(self, code: str, fast: bool = False,
+                           as_of_date: str = None) -> Optional[Dict[str, Any]]:
+        """获取财务数据（优先读本地 StockFinancial 表，未命中则 fallback API）
+
+        Args:
+            as_of_date: 可选，限制 report_date <= as_of_date，防止回测场景使用未来数据
+        """
         from utils.asset_type import to_ts_code
         resolved_code = to_ts_code(code)
         # --- 优先读本地 SQLite ---
@@ -339,6 +344,8 @@ class StockService:
             from models.quant_data import StockFinancial
             with db_session() as db:
                 query = db.query(StockFinancial).filter(StockFinancial.code == resolved_code)
+                if as_of_date:
+                    query = query.filter(StockFinancial.report_date <= as_of_date)
                 row = query.order_by(StockFinancial.report_date.desc()).first()
                 if row:
                     result = {
@@ -358,6 +365,12 @@ class StockService:
             log.warning(f"[StockService] 本地查询 financial 失败: {e}")
         
         # --- Fallback: 原始 API 逻辑 ---
+        # 当有 as_of_date（回测场景）时，跳过 fallback API 以避免前视偏差（FS-01 修复）：
+        # 外部 API 不支持历史日期过滤，会返回最新财报，构成未来数据泄漏。
+        if as_of_date:
+            log.debug("financial_fallback_skipped_pit", code=code, as_of_date=as_of_date)
+            return None
+
         source = self.get_current_source()
         result = source.get_financial_data(code) if source else None
         

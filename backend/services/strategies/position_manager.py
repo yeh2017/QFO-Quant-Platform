@@ -8,7 +8,10 @@
 """
 
 import numpy as np
+import structlog
 from typing import Dict, List
+
+log = structlog.get_logger(__name__)
 
 
 class PositionManager:
@@ -30,6 +33,10 @@ class PositionManager:
         """
         信号驱动：逐日更新持仓。
 
+        注意：不再直接修改 holding，改为在调用方 Phase1 确认执行后
+        通过 holding = current_weights > 1e-6 重建，避免乐观更新导致
+        Phase1 拦截后 holding 状态与实际权重不同步（BT-01 修复）。
+
         Args:
             signals: (N,) 当日信号 +1/-1/0
             holding: (N,) 当前持仓状态 bool
@@ -39,21 +46,21 @@ class PositionManager:
             (weights, changed): 新权重向量和是否有变化
         """
         if allow_reentry:
-            # 网格模式：买/卖信号不受持仓状态限制
             buy_mask = signals > 0
             sell_mask = signals < 0
         else:
-            # 二元模式（MACD/布林带等）：只在未持仓时买、已持仓时卖
             buy_mask = (signals > 0) & ~holding
             sell_mask = (signals < 0) & holding
 
         if not np.any(buy_mask) and not np.any(sell_mask):
             return None, False
 
-        holding[buy_mask] = True
-        holding[sell_mask] = False
-        n_hold = int(holding.sum())
-        weights = np.where(holding, 1.0 / max(n_hold, 1), 0.0)
+        # 使用副本计算 proposed weights，不修改传入的 holding 引用
+        proposed_holding = holding.copy()
+        proposed_holding[buy_mask] = True
+        proposed_holding[sell_mask] = False
+        n_hold = int(proposed_holding.sum())
+        weights = np.where(proposed_holding, 1.0 / max(n_hold, 1), 0.0)
         return weights, True
 
     def factor_to_weights(
@@ -79,7 +86,7 @@ class PositionManager:
             return self._double_low_weights(codes, as_of_date)
 
         if factor_scores:
-            score_arr = np.array([factor_scores.get(c, 0.5) for c in codes])
+            score_arr = np.array([factor_scores.get(c, 0.0) for c in codes])
             ranked = np.argsort(-score_arr)[:top_n]
             raw = score_arr[ranked]
             total = raw.sum()
@@ -88,8 +95,9 @@ class PositionManager:
             else:
                 w[ranked] = 1.0 / top_n
         else:
-            k = min(top_n, n)
-            w[:k] = 1.0 / k
+            # 因子数据缺失时保持现金，不按代码顺序随机选股（PM-01 修复）
+            log.warning("factor_scores_empty", codes_count=n, strategy=strategy_type)
+            return np.zeros(n)
 
         # 权重裁剪：仅当显式设置且持仓数足够时生效
         if max_single_weight and max_single_weight > 0:
@@ -118,14 +126,28 @@ class PositionManager:
             weights = weights / weights.sum()
         return weights
 
-    def calc_cost(self, current_weights: np.ndarray, new_weights: np.ndarray) -> float:
-        """计算换手成本（佣金 + 印花税 + 滑点）"""
-        sell_turnover = np.sum(np.maximum(current_weights - new_weights, 0))
+    def calc_cost(self, current_weights: np.ndarray, new_weights: np.ndarray,
+                  asset_types: np.ndarray = None) -> float:
+        """计算换手成本（佣金 + 印花税 + 滑点）
+
+        Args:
+            asset_types: (N,) 资产类型数组 (0=股票, 1=ETF, 2=可转债)。
+                         ETF/可转债免印花税（BT-03 修复）。None 时退化为原行为。
+        """
+        sell_amounts = np.maximum(current_weights - new_weights, 0)
         buy_turnover = np.sum(np.maximum(new_weights - current_weights, 0))
-        total_turnover = buy_turnover + sell_turnover
+        total_sell = np.sum(sell_amounts)
+        if asset_types is not None:
+            stock_mask = asset_types == 0
+            stock_sell = np.sum(sell_amounts[stock_mask])
+            other_sell = total_sell - stock_sell
+            sell_cost = (stock_sell * (self.commission + self.stamp_tax)
+                         + other_sell * self.commission)
+        else:
+            sell_cost = total_sell * (self.commission + self.stamp_tax)
         return (buy_turnover * self.commission
-                + sell_turnover * (self.commission + self.stamp_tax)
-                + total_turnover * self.slippage)
+                + sell_cost
+                + (buy_turnover + total_sell) * self.slippage)
 
     @staticmethod
     def _apply_weight_cap(weights: np.ndarray, max_weight: float = 0.30) -> np.ndarray:

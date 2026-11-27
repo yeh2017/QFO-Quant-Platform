@@ -168,6 +168,64 @@ class FullMarketUniverse(UniverseProvider):
         self._cache[date] = codes
         return codes
 
+# 宽基指数代码映射（与 stock_pool_resolver / sync_index_weight 保持一致）
+_INDEX_CODE_MAP = {
+    "hs300": "399300.SZ",
+    "zz500": "000905.SH",
+    "zz1000": "000852.SH",
+}
+
+
+class IndexUniverse(UniverseProvider):
+    """指数成分池：按历史月末成分动态选股
+
+    从本地 index_weight 表取 <= date 的最近月末快照，
+    实现按历史时点还原指数成分（消除用最新成分回测历史的前视偏差）。
+    需先通过 backfill_index_weight() 回填历史数据。
+    """
+
+    def __init__(self, index_code: str):
+        self.index_code = index_code
+        self._cache: Dict[str, List[str]] = {}
+
+    def get_codes(self, date: str) -> List[str]:
+        if date in self._cache:
+            return self._cache[date]
+
+        from core.database import db_session
+        from models.quant_data import IndexWeight
+        from sqlalchemy import func
+
+        with db_session() as db:
+            # 找到 <= date 的最近月末快照日期
+            latest = (
+                db.query(func.max(IndexWeight.trade_date))
+                .filter(
+                    IndexWeight.index_code == self.index_code,
+                    IndexWeight.trade_date <= date,
+                )
+                .scalar()
+            )
+            if not latest:
+                log.warning("index_universe_no_data", index=self.index_code, date=date)
+                self._cache[date] = []
+                return []
+
+            codes = [
+                r[0] for r in
+                db.query(IndexWeight.con_code)
+                .filter(
+                    IndexWeight.index_code == self.index_code,
+                    IndexWeight.trade_date == latest,
+                )
+                .all()
+            ]
+
+        log.info("index_universe_result", index=self.index_code,
+                 date=date, snapshot_date=str(latest), count=len(codes))
+        self._cache[date] = codes
+        return codes
+
 
 def create_provider(config: Dict[str, Any]) -> UniverseProvider:
     """工厂函数：根据配置创建对应的 Provider"""
@@ -183,5 +241,11 @@ def create_provider(config: Dict[str, Any]) -> UniverseProvider:
         return FactorFilterUniverse(filters)
     elif provider_type == "full_market":
         return FullMarketUniverse()
+    elif provider_type == "index":
+        index_key = config.get("index", "hs300")
+        index_code = _INDEX_CODE_MAP.get(index_key)
+        if not index_code:
+            raise ValueError(f"未知的指数类型: {index_key}，支持: {list(_INDEX_CODE_MAP.keys())}")
+        return IndexUniverse(index_code)
     else:
         raise ValueError(f"未知的标的池类型: {provider_type}")

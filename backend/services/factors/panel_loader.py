@@ -90,15 +90,28 @@ def load_panel(
 def _load_bar_panel(
     codes: list, start_date: str, end_date: str, fields: list
 ) -> dict[str, pd.DataFrame]:
-    """从 StockDailyBar 加载行情面板"""
+    """从 StockDailyBar 加载行情面板
+
+    价格类字段（open/high/low/close）自动乘以 adj_factor 转为后复权，
+    避免除权日产生虚假价格跳变（PL-01 修复）。
+    """
     from core.database import db_session
     from models.quant_data import StockDailyBar
+
+    # 价格类字段需要复权处理
+    price_fields = {'open', 'high', 'low', 'close'}
+    need_adj = bool(price_fields & set(fields))
 
     columns_to_query = [StockDailyBar.code, StockDailyBar.trade_date]
     for f in fields:
         col = getattr(StockDailyBar, f, None)
         if col is not None:
             columns_to_query.append(col)
+    # 价格字段需要额外查询 adj_factor
+    if need_adj:
+        adj_col = getattr(StockDailyBar, 'adj_factor', None)
+        if adj_col is not None and adj_col not in columns_to_query:
+            columns_to_query.append(adj_col)
 
     with db_session() as db:
         rows = (
@@ -115,8 +128,17 @@ def _load_bar_panel(
         return {}
 
     col_names = ['code', 'trade_date'] + [f for f in fields if hasattr(StockDailyBar, f)]
+    if need_adj and hasattr(StockDailyBar, 'adj_factor') and 'adj_factor' not in col_names:
+        col_names.append('adj_factor')
     df = pd.DataFrame(rows, columns=col_names)
     df['trade_date'] = pd.to_datetime(df['trade_date'])
+
+    # 对价格字段做后复权：price * adj_factor
+    if need_adj and 'adj_factor' in df.columns:
+        adj = pd.to_numeric(df['adj_factor'], errors='coerce').fillna(1.0)
+        for pf in price_fields:
+            if pf in df.columns:
+                df[pf] = pd.to_numeric(df[pf], errors='coerce') * adj
 
     panel = {}
     for field in fields:

@@ -119,14 +119,18 @@ def analyze_events(
         max_date = max(all_dates) + timedelta(days=max_period + 5)
         with db_session() as db:
             bars = db.query(
-                StockDailyBar.code, StockDailyBar.trade_date, StockDailyBar.close
+                StockDailyBar.code, StockDailyBar.trade_date,
+                StockDailyBar.close, StockDailyBar.adj_factor,
             ).filter(
                 StockDailyBar.code.in_(list(code_set)),
                 StockDailyBar.trade_date >= min_date,
                 StockDailyBar.trade_date <= max_date,
             ).order_by(StockDailyBar.code, StockDailyBar.trade_date).all()
         for bar in bars:
-            price_cache.setdefault(bar.code, []).append((bar.trade_date, bar.close))
+            # 使用后复权价格避免除权日虚假波动（EVT-02 修复）
+            adj = float(bar.adj_factor) if bar.adj_factor else 1.0
+            adj_close = float(bar.close) * adj
+            price_cache.setdefault(bar.code, []).append((bar.trade_date, adj_close))
 
     # 逐条计算收益
     details = []
@@ -134,7 +138,8 @@ def analyze_events(
         code = item["code"]
         pub_date = item["pub_date"]
         all_bars = price_cache.get(code, [])
-        future_bars = [(d, c) for d, c in all_bars if d >= pub_date and c and c > 0]
+        # 基准价改为 T+1 收盘：事件日（尤其晚间新闻）的收盘价已不可交易（EVT-01 修复）
+        future_bars = [(d, c) for d, c in all_bars if d > pub_date and c and c > 0]
         if len(future_bars) < 2:
             continue
 

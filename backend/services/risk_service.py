@@ -134,6 +134,28 @@ class RiskService:
         获取沪深300基准日收益率序列。
         降级链：本地 EtfDailyBar(510300.SH) → Tushare index_daily → AkShare
         """
+        rows_data = self._fetch_benchmark_prices(start_date, end_date)
+        if not rows_data:
+            return []
+        closes = np.array([c for _, c in rows_data], dtype=float)
+        returns = np.diff(closes) / closes[:-1]
+        return returns.tolist()
+
+    def get_benchmark_returns_by_date(self, start_date: str, end_date: str) -> dict:
+        """返回 {trade_date_str: daily_return} 字典，用于按日期精确对齐。"""
+        rows_data = self._fetch_benchmark_prices(start_date, end_date)
+        if len(rows_data) < 2:
+            return {}
+        result = {}
+        for j in range(1, len(rows_data)):
+            d = rows_data[j][0]
+            prev_close = rows_data[j - 1][1]
+            if prev_close > 0:
+                result[d] = (rows_data[j][1] - prev_close) / prev_close
+        return result
+
+    def _fetch_benchmark_prices(self, start_date: str, end_date: str) -> list:
+        """获取基准收盘价序列 [(date_str, close), ...]，内部共用降级链。"""
         # ── 优先：本地 ETF 日线（510300.SH = 沪深300ETF）──
         try:
             from core.database import db_session
@@ -150,10 +172,8 @@ class RiskService:
                         .order_by(EtfDailyBar.trade_date.asc())
                         .all())
                 if rows:
-                    closes = np.array([r.close for r in rows], dtype=float)
-                    returns = np.diff(closes) / closes[:-1]
-                    log.info("benchmark_local_ok", source="EtfDailyBar:510300.SH", points=len(returns))
-                    return returns.tolist()
+                    log.info("benchmark_local_ok", source="EtfDailyBar:510300.SH", points=len(rows))
+                    return [(str(r.trade_date), float(r.close)) for r in rows]
         except (AttributeError, TypeError):
             raise
         except Exception as e:
@@ -172,10 +192,9 @@ class RiskService:
                                  fields="trade_date,close")
             if df is not None and not df.empty:
                 df = df.sort_values("trade_date")
-                closes = df["close"].values.astype(float)
-                returns = np.diff(closes) / closes[:-1]
-                log.info("benchmark_tushare_ok", points=len(returns))
-                return returns.tolist()
+                dates_col = df["trade_date"].astype(str).apply(lambda x: f"{x[:4]}-{x[4:6]}-{x[6:8]}")
+                log.info("benchmark_tushare_ok", points=len(df))
+                return list(zip(dates_col.tolist(), df["close"].astype(float).tolist()))
         except (AttributeError, TypeError):
             raise
         except Exception as e:
@@ -188,9 +207,8 @@ class RiskService:
                                     start_date=start_date.replace("-", ""),
                                     end_date=end_date.replace("-", ""))
             if df is not None and not df.empty:
-                closes = df["收盘"].values.astype(float)
-                returns = np.diff(closes) / closes[:-1]
-                return returns.tolist()
+                dates_list = [str(d)[:10] for d in df["日期"]]
+                return list(zip(dates_list, df["收盘"].astype(float).tolist()))
         except (AttributeError, TypeError):
             raise
         except Exception as e:
