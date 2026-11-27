@@ -6,7 +6,7 @@
 
 ## [v1.0.6] - 2026-11-27
 
-v1.0.6 在公开 v1.0.5 基础上继续改进历史回测、研究因子与指数成分选择。下表列出从更早版本升级时一并获得的改动。
+2026-11-27。本版基于 v1.0.5，已包含 v1.0.3、v1.0.4 和 v1.0.5 的更新。已使用 v1.0.5 的用户可直接查看“本次新增”。
 
 ### 从 v1.0.5 升级：本次新增
 
@@ -30,6 +30,14 @@ v1.0.6 在公开 v1.0.5 基础上继续改进历史回测、研究因子与指�
 [Issue #8：未来函数优化](https://github.com/yeh2017/QFO-Quant-Platform/issues/8) 仍需跟踪。安装包不附带历史数据库；回测前应确认所选区间的指数成分、退市行情、名称变更、真实公告日和复权因子覆盖。月度成分快照不等于逐日重建；若候选并集超过数量上限，区间末的排序截断仍可能影响早期候选。上述改动不代表已消除所有前视或存活偏差。
 
 已知限制：少数情况下，权重重新归一化可能改变受限持仓；临时缺报价可能被提前判作退市。含财报的月度因子研究可能返回空截面，分层研究也可能遗漏缺少因子记录的交易日收益。请勿把这些情形下的回测或研究输出当作已验证的交易收益。
+
+### 下载与升级
+
+- 下载 [v1.0.6 轻量安装包](https://github.com/yeh2017/QFO-Quant-Platform/releases/download/v1.0.6/QFO-Quant-Platform.zip) 和 [SHA256SUMS.txt](https://github.com/yeh2017/QFO-Quant-Platform/releases/download/v1.0.6/SHA256SUMS.txt)。在 PowerShell 中运行 `Get-FileHash .\QFO-Quant-Platform.zip -Algorithm SHA256`，与校验文件核对后完整解压。
+- 首次安装需联网，并准备 Python 3.12+、Node.js 22.12+。先运行 `run_first_time.bat` 安装依赖，以后使用 `run_quick_start.bat`；服务运行期间保持 QFO Backend 和 QFO Frontend 窗口打开。
+- 从旧版迁移前关闭两版服务、备份数据库，按[升级迁移说明](https://github.com/yeh2017/QFO-Quant-Platform/blob/v1.0.6/docs/upgrade-data-migration.md)迁移。不要跨电脑复制 `.venv` 或 `node_modules`；运行时、依赖、行情数据库及个人配置不随包发布。
+
+[完整更新日志](https://github.com/yeh2017/QFO-Quant-Platform/blob/v1.0.6/CHANGELOG.md) · [教学网站](https://www.qfo-quant-platform.com/)
 
 ---
 
